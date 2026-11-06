@@ -393,6 +393,8 @@ class Compiler:
         for function in functions:
             if function.name in self.function_map:
                 self.fail(f"function {function.name!r} is already defined", function.token)
+            if function.name == "len":
+                self.fail("'len' is reserved for the built-in length function", function.token)
             parameter_names = [name for name, _ in function.parameters]
             if len(parameter_names) != len(set(parameter_names)):
                 self.fail("function parameter names must be unique", function.token)
@@ -467,6 +469,18 @@ class Compiler:
             return self.lookup(str(expression.value), expression.token)
         if expression.kind == "call":
             name = str(expression.value)
+            if name == "len":
+                if len(expression.children) != 1:
+                    self.fail("len expects exactly one argument", expression.token)
+                argument = expression.children[0]
+                argument_type = self.infer(argument)
+                if argument_type == "str":
+                    return "i64"
+                if self.array_type_parts(argument_type) is not None and argument.kind == "name":
+                    return "i64"
+                if self.array_type_parts(argument_type) is not None:
+                    self.fail("len of an array requires an array variable", argument.token)
+                self.fail(f"len does not accept values of type {argument_type}", argument.token)
             function = self.function_map.get(name)
             if function is None:
                 self.fail(f"unknown function {name!r}", expression.token)
@@ -520,6 +534,13 @@ class Compiler:
         if kind == "name":
             return f"v_{expression.value}"
         if kind == "call":
+            if expression.value == "len":
+                argument = expression.children[0]
+                argument_type = self.infer(argument)
+                array = self.array_type_parts(argument_type)
+                if array is not None:
+                    return f"{array[1]}LL"
+                return f"((long long)strlen({self.emit_expression(argument)}))"
             arguments = ", ".join(self.emit_expression(arg) for arg in expression.children)
             return f"fluid_{expression.value}({arguments})"
         if kind == "unary":

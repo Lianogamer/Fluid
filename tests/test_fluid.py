@@ -198,6 +198,37 @@ class FluidCompilerTests(unittest.TestCase):
                 'fn main() -> i64 { if "a" < "b" { return 1; } return 0; }'
             )
 
+    def test_len_string_uses_strlen(self):
+        result = self.compile_source(
+            'fn main() -> i64 { print(len("fluid")); return 0; }'
+        )
+        self.assertIn("#include <string.h>", result)
+        self.assertIn('printf("%lld\\n", ((long long)strlen("fluid")));', result)
+
+    def test_len_array_is_a_compile_time_constant(self):
+        result = self.compile_source(
+            "fn main() -> i64 { let values = [10, 20, 30]; "
+            "print(len(values)); return 0; }"
+        )
+        self.assertIn('printf("%lld\\n", 3LL);', result)
+
+    def test_len_requires_one_string_or_array_argument(self):
+        with self.assertRaisesRegex(FluidError, "len expects exactly one argument"):
+            self.compile_source('fn main() -> i64 { print(len()); return 0; }')
+        with self.assertRaisesRegex(FluidError, "len does not accept values of type i64"):
+            self.compile_source("fn main() -> i64 { print(len(1)); return 0; }")
+
+    def test_len_of_array_literal_is_rejected(self):
+        with self.assertRaisesRegex(FluidError, "len of an array requires an array variable"):
+            self.compile_source(
+                "fn value() -> i64 { return 1; }"
+                "fn main() -> i64 { print(len([value(), value()])); return 0; }"
+            )
+
+    def test_len_is_reserved_for_builtin(self):
+        with self.assertRaisesRegex(FluidError, "len.*reserved"):
+            self.compile_source("fn len(value: str) -> i64 { return 0; } fn main() -> i64 { return 0; }")
+
     def test_statement_after_return_is_rejected(self):
         with self.assertRaisesRegex(FluidError, "unreachable statement"):
             self.compile_source("fn main() -> i64 { return 0; print(1); }")
