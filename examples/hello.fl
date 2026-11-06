@@ -12,5 +12,8 @@ fn main() -> i64 {
     for number in 1..4 {
         print(number);
     }
+
+    let scores: [i64; 3] = [98, 87, 100];
+    print(scores[0]);
     return 0;
 }

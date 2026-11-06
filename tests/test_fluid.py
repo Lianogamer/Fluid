@@ -119,6 +119,65 @@ class FluidCompilerTests(unittest.TestCase):
         self.assertIn("continue;", result)
         self.assertIn("break;", result)
 
+    def test_array_literal_and_index_read_are_emitted(self):
+        result = self.compile_source(
+            "fn main() -> i64 { let values: [i64; 3] = [10, 20, 30]; "
+            "print(values[1]); return 0; }"
+        )
+        self.assertIn("long long v_values[3] = {10LL, 20LL, 30LL};", result)
+        self.assertRegex(result, r"fluid_checked_index\(\(long long\)\(1LL\), 3, 1, \d+\)")
+        self.assertIn("array index out of bounds", result)
+
+    def test_array_literal_infers_element_type_and_length(self):
+        result = self.compile_source(
+            "fn main() -> i64 { let flags = [true, false]; "
+            "print(flags[0]); return 0; }"
+        )
+        self.assertIn("bool v_flags[2] = {true, false};", result)
+
+    def test_var_array_elements_can_be_assigned(self):
+        result = self.compile_source(
+            "fn main() -> i64 { var values = [1, 2]; "
+            "values[0] = 9; print(values[0]); return 0; }"
+        )
+        self.assertIn("v_values[fluid_checked_index", result)
+        self.assertIn(" = 9LL;", result)
+
+    def test_let_array_elements_cannot_be_assigned(self):
+        with self.assertRaisesRegex(FluidError, "immutable let binding"):
+            self.compile_source(
+                "fn main() -> i64 { let values = [1, 2]; "
+                "values[0] = 9; return 0; }"
+            )
+
+    def test_array_literal_rejects_mixed_element_types(self):
+        with self.assertRaisesRegex(FluidError, "array elements must have the same type"):
+            self.compile_source("fn main() -> i64 { let values = [1, true]; return 0; }")
+
+    def test_array_annotation_requires_matching_length(self):
+        with self.assertRaisesRegex(FluidError, "cannot assign array:i64:2 to array:i64:3"):
+            self.compile_source(
+                "fn main() -> i64 { let values: [i64; 3] = [1, 2]; return 0; }"
+            )
+
+    def test_array_index_must_be_an_integer(self):
+        with self.assertRaisesRegex(FluidError, "array index must have type i64"):
+            self.compile_source(
+                "fn main() -> i64 { let values = [1, 2]; "
+                "print(values[false]); return 0; }"
+            )
+
+    def test_non_array_values_cannot_be_indexed(self):
+        with self.assertRaisesRegex(FluidError, "cannot index value of type i64"):
+            self.compile_source("fn main() -> i64 { let value = 1; print(value[0]); return 0; }")
+
+    def test_arrays_are_rejected_in_function_signatures(self):
+        with self.assertRaisesRegex(FluidError, "arrays cannot be function parameters"):
+            self.compile_source(
+                "fn first(values: [i64; 2]) -> i64 { return values[0]; }"
+                "fn main() -> i64 { return 0; }"
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

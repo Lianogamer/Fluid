@@ -110,7 +110,7 @@ def tokenize(source: str) -> list[Token]:
             i += len(operator)
             column += len(operator)
             continue
-        if char in "(){}:;,=+-*/%!<>":
+        if char in "(){}[]:;,=+-*/%!<>":
             tokens.append(Token("symbol", char, start_line, start_column))
             i += 1
             column += 1
@@ -215,6 +215,22 @@ class Parser:
         return Function(name, parameters, return_type, self.parse_block(), start)
 
     def parse_type(self) -> str:
+        if self.accept("["):
+            token = self.expect_identifier()
+            aliases = {"int": "i64", "float": "f64", "string": "str"}
+            element_type = aliases.get(token.value, token.value)
+            if element_type not in {"i64", "f64", "bool", "str"}:
+                self.fail(f"invalid array element type {token.value!r}", token)
+            self.expect(";")
+            length = self.current
+            if length.kind != "number" or "." in length.value:
+                self.fail("expected a positive integer array length", length)
+            self.index += 1
+            if int(length.value) < 1:
+                self.fail("array length must be at least 1", length)
+            self.expect("]")
+            return f"array:{element_type}:{length.value}"
+
         token = self.expect_identifier()
         aliases = {"int": "i64", "float": "f64", "string": "str"}
         value = aliases.get(token.value, token.value)
@@ -275,12 +291,13 @@ class Parser:
             self.expect(";")
             return Statement("continue", None, None, None, None, token)
         if self.current.kind == "identifier":
-            name = self.current.value
-            self.index += 1
+            target = self.parse_expression()
+            if target.kind not in {"name", "index"}:
+                self.fail("assignment target must be a variable or array element", token)
             self.expect("=")
             expression = self.parse_expression()
             self.expect(";")
-            return Statement("assign", name, expression, None, None, token)
+            return Statement("assign", target, expression, None, None, token)
         self.fail(f"unexpected token {self.current.value!r} in statement")
         raise AssertionError("unreachable")
 
@@ -324,10 +341,28 @@ class Parser:
                 left = Expr("call", token.value, arguments, token)
             else:
                 left = Expr("name", token.value, [], token)
+        elif self.accept("["):
+            elements = []
+            if self.current.value != "]":
+                while True:
+                    elements.append(self.parse_expression())
+                    if not self.accept(","):
+                        break
+            self.expect("]")
+            if not elements:
+                self.fail("array literals must contain at least one element", token)
+            left = Expr("array", None, elements, token)
         else:
             self.fail("expected an expression")
 
-        while self.current.value in self.PRECEDENCE:
+        while True:
+            if self.accept("["):
+                index = self.parse_expression()
+                self.expect("]")
+                left = Expr("index", None, [left, index], token)
+                continue
+            if self.current.value not in self.PRECEDENCE:
+                break
             precedence = self.PRECEDENCE[self.current.value]
             if precedence < minimum_precedence:
                 break
@@ -367,6 +402,11 @@ class Compiler:
         main = self.function_map["main"]
         if main.parameters or main.return_type not in {"i64", "unit"}:
             self.fail("main must have no parameters and return i64 or unit", main.token)
+        for function in functions:
+            if function.return_type.startswith("array:") or any(
+                type_name.startswith("array:") for _, type_name in function.parameters
+            ):
+                self.fail("arrays cannot be function parameters or return values yet", function.token)
 
     @staticmethod
     def fail(message: str, token: Token) -> None:
@@ -374,7 +414,17 @@ class Compiler:
 
     @staticmethod
     def c_type(type_name: str) -> str:
+        array = Compiler.array_type_parts(type_name)
+        if array is not None:
+            type_name, _ = array
         return Compiler.C_TYPES[type_name]
+
+    @staticmethod
+    def array_type_parts(type_name: str) -> tuple[str, int] | None:
+        if not type_name.startswith("array:"):
+            return None
+        _, element_type, length = type_name.split(":")
+        return element_type, int(length)
 
     def lookup(self, name: str, token: Token) -> str:
         for scope in reversed(self.scopes):
@@ -395,6 +445,24 @@ class Compiler:
             return "str"
         if expression.kind == "boolean":
             return "bool"
+        if expression.kind == "array":
+            element_type = self.infer(expression.children[0])
+            if element_type == "unit" or element_type.startswith("array:"):
+                self.fail("array elements must have a primitive non-unit type", expression.token)
+            for element in expression.children[1:]:
+                actual = self.infer(element)
+                if actual != element_type:
+                    self.fail(f"array elements must have the same type; got {element_type} and {actual}",
+                              element.token)
+            return f"array:{element_type}:{len(expression.children)}"
+        if expression.kind == "index":
+            array_type = self.infer(expression.children[0])
+            array = self.array_type_parts(array_type)
+            if array is None:
+                self.fail(f"cannot index value of type {array_type}", expression.token)
+            if self.infer(expression.children[1]) != "i64":
+                self.fail("array index must have type i64", expression.children[1].token)
+            return array[0]
         if expression.kind == "name":
             return self.lookup(str(expression.value), expression.token)
         if expression.kind == "call":
@@ -445,6 +513,8 @@ class Compiler:
             return value if "." in value else value + ".0"
         if kind == "string":
             return json.dumps(expression.value, ensure_ascii=False)
+        if kind == "array":
+            return "{" + ", ".join(self.emit_expression(child) for child in expression.children) + "}"
         if kind == "boolean":
             return "true" if expression.value == "true" else "false"
         if kind == "name":
@@ -457,6 +527,18 @@ class Compiler:
         if kind == "binary":
             left, right = (self.emit_expression(child) for child in expression.children)
             return f"({left} {expression.value} {right})"
+        if kind == "index":
+            array_type = self.infer(expression.children[0])
+            array = self.array_type_parts(array_type)
+            if array is None:
+                self.fail(f"cannot index value of type {array_type}", expression.token)
+            value = self.emit_expression(expression.children[0])
+            index = self.emit_expression(expression.children[1])
+            checked = (
+                f"fluid_checked_index((long long)({index}), {array[1]}, "
+                f"{expression.token.line}, {expression.token.column})"
+            )
+            return f"{value}[{checked}]"
         raise AssertionError(f"unhandled expression: {kind}")
 
     def line(self, text: str) -> str:
@@ -503,23 +585,49 @@ class Compiler:
                 self.fail(f"variable {name!r} is already defined in this scope", statement.token)
             scope[name] = (declared, statement.kind == "var")
             value = self.emit_expression(statement.expression)
+            array = self.array_type_parts(declared)
+            if array is not None:
+                return self.line(f"{self.c_type(declared)} v_{name}[{array[1]}] = {value};")
             return self.line(f"{self.c_type(declared)} v_{name} = {value};")
         if statement.kind == "assign":
-            name = str(statement.value)
-            declared = None
-            mutable = False
-            for scope in reversed(self.scopes):
-                if name in scope:
-                    declared, mutable = scope[name]
-                    break
-            if declared is None:
-                self.fail(f"unknown variable {name!r}", statement.token)
-            if not mutable:
-                self.fail(f"cannot assign to immutable let binding {name!r}; use var", statement.token)
+            target = statement.value
+            if target.kind == "name":
+                name = str(target.value)
+                declared = None
+                mutable = False
+                for scope in reversed(self.scopes):
+                    if name in scope:
+                        declared, mutable = scope[name]
+                        break
+                if declared is None:
+                    self.fail(f"unknown variable {name!r}", statement.token)
+                if not mutable:
+                    self.fail(f"cannot assign to immutable let binding {name!r}; use var", statement.token)
+                target_type = declared
+            else:
+                base = target.children[0]
+                if base.kind != "name":
+                    self.fail("array assignment requires a mutable array variable", statement.token)
+                name = str(base.value)
+                declared = None
+                mutable = False
+                for scope in reversed(self.scopes):
+                    if name in scope:
+                        declared, mutable = scope[name]
+                        break
+                if declared is None:
+                    self.fail(f"unknown variable {name!r}", statement.token)
+                if not mutable:
+                    self.fail(f"cannot assign to an element of immutable let binding {name!r}", statement.token)
+                target_type = self.infer(target)
             actual = self.infer(statement.expression)
-            if actual != declared:
-                self.fail(f"cannot assign {actual} to {declared}", statement.token)
-            return self.line(f"v_{name} = {self.emit_expression(statement.expression)};")
+            if target_type.startswith("array:"):
+                self.fail("whole-array assignment is not supported", statement.token)
+            if actual != target_type:
+                self.fail(f"cannot assign {actual} to {target_type}", statement.token)
+            return self.line(
+                f"{self.emit_expression(target)} = {self.emit_expression(statement.expression)};"
+            )
         if statement.kind == "print":
             value_type = self.infer(statement.expression)
             value = self.emit_expression(statement.expression)
@@ -592,6 +700,17 @@ class Compiler:
         output = [
             "#include <stdbool.h>",
             "#include <stdio.h>",
+            "#include <stddef.h>",
+            "#include <stdlib.h>",
+            "",
+            "static size_t fluid_checked_index(long long index, size_t length, int line, int column)",
+            "{",
+            "    if (index < 0 || (unsigned long long)index >= length) {",
+            '        fprintf(stderr, "fluid: array index out of bounds at %d:%d\\n", line, column);',
+            "        exit(1);",
+            "    }",
+            "    return (size_t)index;",
+            "}",
             "",
         ]
         for function in self.functions:
