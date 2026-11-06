@@ -55,6 +55,11 @@ def tokenize(source: str) -> list[Token]:
             continue
 
         start_line, start_column = line, column
+        if source.startswith("..", i):
+            tokens.append(Token("symbol", "..", start_line, start_column))
+            i += 2
+            column += 2
+            continue
         if char == '"':
             start = i
             i += 1
@@ -82,7 +87,7 @@ def tokenize(source: str) -> list[Token]:
             tokens.append(Token("string", value, start_line, start_column))
             continue
 
-        number = re.match(r"(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)", source[i:])
+        number = re.match(r"(?:[0-9]+(?:\.(?!\.)[0-9]*)?|\.(?!\.)[0-9]+)", source[i:])
         if number:
             value = number.group(0)
             tokens.append(Token("number", value, start_line, start_column))
@@ -105,7 +110,7 @@ def tokenize(source: str) -> list[Token]:
             i += len(operator)
             column += len(operator)
             continue
-        if char in "(){}:;,=+-*/%!<>":
+        if char in "(){}[]:;,=+-*/%!<>":
             tokens.append(Token("symbol", char, start_line, start_column))
             i += 1
             column += 1
@@ -210,6 +215,22 @@ class Parser:
         return Function(name, parameters, return_type, self.parse_block(), start)
 
     def parse_type(self) -> str:
+        if self.accept("["):
+            token = self.expect_identifier()
+            aliases = {"int": "i64", "float": "f64", "string": "str"}
+            element_type = aliases.get(token.value, token.value)
+            if element_type not in {"i64", "f64", "bool", "str"}:
+                self.fail(f"invalid array element type {token.value!r}", token)
+            self.expect(";")
+            length = self.current
+            if length.kind != "number" or "." in length.value:
+                self.fail("expected a positive integer array length", length)
+            self.index += 1
+            if int(length.value) < 1:
+                self.fail("array length must be at least 1", length)
+            self.expect("]")
+            return f"array:{element_type}:{length.value}"
+
         token = self.expect_identifier()
         aliases = {"int": "i64", "float": "f64", "string": "str"}
         value = aliases.get(token.value, token.value)
@@ -239,6 +260,12 @@ class Parser:
             self.expect(")")
             self.expect(";")
             return Statement("print", None, expression, None, None, token)
+        if self.accept("assert"):
+            self.expect("(")
+            expression = self.parse_expression()
+            self.expect(")")
+            self.expect(";")
+            return Statement("assert", None, expression, None, None, token)
         if self.accept("return"):
             expression = None if self.current.value == ";" else self.parse_expression()
             self.expect(";")
@@ -256,6 +283,13 @@ class Parser:
         if self.accept("while"):
             condition = self.parse_expression()
             return Statement("while", None, condition, self.parse_block(), None, token)
+        if self.accept("for"):
+            name = self.expect_identifier().value
+            self.expect("in")
+            start = self.parse_expression()
+            self.expect("..")
+            end = self.parse_expression()
+            return Statement("for", (name, start, end), None, self.parse_block(), None, token)
         if self.accept("break"):
             self.expect(";")
             return Statement("break", None, None, None, None, token)
@@ -263,12 +297,13 @@ class Parser:
             self.expect(";")
             return Statement("continue", None, None, None, None, token)
         if self.current.kind == "identifier":
-            name = self.current.value
-            self.index += 1
+            target = self.parse_expression()
+            if target.kind not in {"name", "index"}:
+                self.fail("assignment target must be a variable or array element", token)
             self.expect("=")
             expression = self.parse_expression()
             self.expect(";")
-            return Statement("assign", name, expression, None, None, token)
+            return Statement("assign", target, expression, None, None, token)
         self.fail(f"unexpected token {self.current.value!r} in statement")
         raise AssertionError("unreachable")
 
@@ -312,10 +347,28 @@ class Parser:
                 left = Expr("call", token.value, arguments, token)
             else:
                 left = Expr("name", token.value, [], token)
+        elif self.accept("["):
+            elements = []
+            if self.current.value != "]":
+                while True:
+                    elements.append(self.parse_expression())
+                    if not self.accept(","):
+                        break
+            self.expect("]")
+            if not elements:
+                self.fail("array literals must contain at least one element", token)
+            left = Expr("array", None, elements, token)
         else:
             self.fail("expected an expression")
 
-        while self.current.value in self.PRECEDENCE:
+        while True:
+            if self.accept("["):
+                index = self.parse_expression()
+                self.expect("]")
+                left = Expr("index", None, [left, index], token)
+                continue
+            if self.current.value not in self.PRECEDENCE:
+                break
             precedence = self.PRECEDENCE[self.current.value]
             if precedence < minimum_precedence:
                 break
@@ -327,6 +380,24 @@ class Parser:
 
 
 class Compiler:
+    BUILTINS = {
+        "len": (None, "i64", None),
+        "abs": (("i64",), "i64", "fluid_abs_i64"),
+        "min": (("i64", "i64"), "i64", "fluid_min_i64"),
+        "max": (("i64", "i64"), "i64", "fluid_max_i64"),
+        "clamp": (("i64", "i64", "i64"), "i64", "fluid_clamp_i64"),
+        "sign": (("i64",), "i64", "fluid_sign_i64"),
+        "sqrt": (("f64",), "f64", "sqrt"),
+        "pow": (("f64", "f64"), "f64", "pow"),
+        "floor": (("f64",), "f64", "floor"),
+        "ceil": (("f64",), "f64", "ceil"),
+        "round": (("f64",), "f64", "round"),
+        "contains": (("str", "str"), "bool", "fluid_contains"),
+        "starts_with": (("str", "str"), "bool", "fluid_starts_with"),
+        "ends_with": (("str", "str"), "bool", "fluid_ends_with"),
+        "is_empty": (("str",), "bool", "fluid_is_empty"),
+    }
+
     C_TYPES = {
         "i64": "long long",
         "f64": "double",
@@ -342,9 +413,12 @@ class Compiler:
         self.return_type = "unit"
         self.indent = 0
         self.loop_depth = 0
+        self.range_counter = 0
         for function in functions:
             if function.name in self.function_map:
                 self.fail(f"function {function.name!r} is already defined", function.token)
+            if function.name in self.BUILTINS:
+                self.fail(f"{function.name!r} is reserved for a built-in function", function.token)
             parameter_names = [name for name, _ in function.parameters]
             if len(parameter_names) != len(set(parameter_names)):
                 self.fail("function parameter names must be unique", function.token)
@@ -354,6 +428,11 @@ class Compiler:
         main = self.function_map["main"]
         if main.parameters or main.return_type not in {"i64", "unit"}:
             self.fail("main must have no parameters and return i64 or unit", main.token)
+        for function in functions:
+            if function.return_type.startswith("array:") or any(
+                type_name.startswith("array:") for _, type_name in function.parameters
+            ):
+                self.fail("arrays cannot be function parameters or return values yet", function.token)
 
     @staticmethod
     def fail(message: str, token: Token) -> None:
@@ -361,7 +440,17 @@ class Compiler:
 
     @staticmethod
     def c_type(type_name: str) -> str:
+        array = Compiler.array_type_parts(type_name)
+        if array is not None:
+            type_name, _ = array
         return Compiler.C_TYPES[type_name]
+
+    @staticmethod
+    def array_type_parts(type_name: str) -> tuple[str, int] | None:
+        if not type_name.startswith("array:"):
+            return None
+        _, element_type, length = type_name.split(":")
+        return element_type, int(length)
 
     def lookup(self, name: str, token: Token) -> str:
         for scope in reversed(self.scopes):
@@ -382,10 +471,50 @@ class Compiler:
             return "str"
         if expression.kind == "boolean":
             return "bool"
+        if expression.kind == "array":
+            element_type = self.infer(expression.children[0])
+            if element_type == "unit" or element_type.startswith("array:"):
+                self.fail("array elements must have a primitive non-unit type", expression.token)
+            for element in expression.children[1:]:
+                actual = self.infer(element)
+                if actual != element_type:
+                    self.fail(f"array elements must have the same type; got {element_type} and {actual}",
+                              element.token)
+            return f"array:{element_type}:{len(expression.children)}"
+        if expression.kind == "index":
+            array_type = self.infer(expression.children[0])
+            array = self.array_type_parts(array_type)
+            if array is None:
+                self.fail(f"cannot index value of type {array_type}", expression.token)
+            if self.infer(expression.children[1]) != "i64":
+                self.fail("array index must have type i64", expression.children[1].token)
+            return array[0]
         if expression.kind == "name":
             return self.lookup(str(expression.value), expression.token)
         if expression.kind == "call":
             name = str(expression.value)
+            builtin = self.BUILTINS.get(name)
+            if builtin is not None:
+                expected_types, result_type, _ = builtin
+                if name == "len":
+                    if len(expression.children) != 1:
+                        self.fail("len expects exactly one argument", expression.token)
+                    argument = expression.children[0]
+                    argument_type = self.infer(argument)
+                    if argument_type == "str":
+                        return "i64"
+                    if self.array_type_parts(argument_type) is not None and argument.kind == "name":
+                        return "i64"
+                    if self.array_type_parts(argument_type) is not None:
+                        self.fail("len of an array requires an array variable", argument.token)
+                    self.fail(f"len does not accept values of type {argument_type}", argument.token)
+                if len(expression.children) != len(expected_types):
+                    self.fail(f"{name} expects exactly {len(expected_types)} argument(s)", expression.token)
+                for argument, expected in zip(expression.children, expected_types):
+                    actual = self.infer(argument)
+                    if actual != expected:
+                        self.fail(f"{name} expects {expected}, got {actual}", argument.token)
+                return result_type
             function = self.function_map.get(name)
             if function is None:
                 self.fail(f"unknown function {name!r}", expression.token)
@@ -410,7 +539,7 @@ class Compiler:
                 if left == right == "bool":
                     return "bool"
             elif operator in {"==", "!="}:
-                if left == right and left in {"i64", "f64", "bool"}:
+                if left == right and left in {"i64", "f64", "bool", "str"}:
                     return "bool"
             elif operator in {"<", "<=", ">", ">="}:
                 if left == right and left in {"i64", "f64"}:
@@ -432,18 +561,48 @@ class Compiler:
             return value if "." in value else value + ".0"
         if kind == "string":
             return json.dumps(expression.value, ensure_ascii=False)
+        if kind == "array":
+            return "{" + ", ".join(self.emit_expression(child) for child in expression.children) + "}"
         if kind == "boolean":
             return "true" if expression.value == "true" else "false"
         if kind == "name":
             return f"v_{expression.value}"
         if kind == "call":
+            name = str(expression.value)
+            if name == "len":
+                argument = expression.children[0]
+                argument_type = self.infer(argument)
+                array = self.array_type_parts(argument_type)
+                if array is not None:
+                    return f"{array[1]}LL"
+                return f"((long long)strlen({self.emit_expression(argument)}))"
+            builtin = self.BUILTINS.get(name)
+            if builtin is not None:
+                _, _, c_name = builtin
+                arguments = ", ".join(self.emit_expression(arg) for arg in expression.children)
+                return f"{c_name}({arguments})"
             arguments = ", ".join(self.emit_expression(arg) for arg in expression.children)
             return f"fluid_{expression.value}({arguments})"
         if kind == "unary":
             return f"({expression.value}{self.emit_expression(expression.children[0])})"
         if kind == "binary":
             left, right = (self.emit_expression(child) for child in expression.children)
+            if self.infer(expression.children[0]) == "str" and expression.value in {"==", "!="}:
+                comparison = f"strcmp({left}, {right})"
+                return f"({comparison} {'==' if expression.value == '==' else '!='} 0)"
             return f"({left} {expression.value} {right})"
+        if kind == "index":
+            array_type = self.infer(expression.children[0])
+            array = self.array_type_parts(array_type)
+            if array is None:
+                self.fail(f"cannot index value of type {array_type}", expression.token)
+            value = self.emit_expression(expression.children[0])
+            index = self.emit_expression(expression.children[1])
+            checked = (
+                f"fluid_checked_index((long long)({index}), {array[1]}, "
+                f"{expression.token.line}, {expression.token.column})"
+            )
+            return f"{value}[{checked}]"
         raise AssertionError(f"unhandled expression: {kind}")
 
     def line(self, text: str) -> str:
@@ -462,7 +621,7 @@ class Compiler:
 
     def emit_control_flow(self, statement: Statement) -> str:
         if self.loop_depth == 0:
-            self.fail(f"{statement.kind} is only valid inside a while loop", statement.token)
+            self.fail(f"{statement.kind} is only valid inside a loop", statement.token)
         return self.line(f"{statement.kind};")
 
     @staticmethod
@@ -475,6 +634,35 @@ class Compiler:
                     and Compiler.always_returns(statement.alternative)):
                 return True
         return False
+
+    @staticmethod
+    def always_terminates(statements: list[Statement]) -> bool:
+        for statement in statements:
+            if statement.kind in {"return", "break", "continue"}:
+                return True
+            if (statement.kind == "if" and statement.alternative is not None
+                    and Compiler.always_terminates(statement.body)
+                    and Compiler.always_terminates(statement.alternative)):
+                return True
+        return False
+
+    def validate_reachable(self, statements: list[Statement]) -> None:
+        terminated = False
+        for statement in statements:
+            if terminated:
+                self.fail("unreachable statement", statement.token)
+            if statement.kind == "if":
+                self.validate_reachable(statement.body)
+                if statement.alternative is not None:
+                    self.validate_reachable(statement.alternative)
+                    terminated = (
+                        self.always_terminates(statement.body)
+                        and self.always_terminates(statement.alternative)
+                    )
+            elif statement.kind in {"while", "for"}:
+                self.validate_reachable(statement.body)
+            elif statement.kind in {"return", "break", "continue"}:
+                terminated = True
 
     def emit_statement(self, statement: Statement) -> str:
         if statement.kind in {"let", "var"}:
@@ -490,23 +678,49 @@ class Compiler:
                 self.fail(f"variable {name!r} is already defined in this scope", statement.token)
             scope[name] = (declared, statement.kind == "var")
             value = self.emit_expression(statement.expression)
+            array = self.array_type_parts(declared)
+            if array is not None:
+                return self.line(f"{self.c_type(declared)} v_{name}[{array[1]}] = {value};")
             return self.line(f"{self.c_type(declared)} v_{name} = {value};")
         if statement.kind == "assign":
-            name = str(statement.value)
-            declared = None
-            mutable = False
-            for scope in reversed(self.scopes):
-                if name in scope:
-                    declared, mutable = scope[name]
-                    break
-            if declared is None:
-                self.fail(f"unknown variable {name!r}", statement.token)
-            if not mutable:
-                self.fail(f"cannot assign to immutable let binding {name!r}; use var", statement.token)
+            target = statement.value
+            if target.kind == "name":
+                name = str(target.value)
+                declared = None
+                mutable = False
+                for scope in reversed(self.scopes):
+                    if name in scope:
+                        declared, mutable = scope[name]
+                        break
+                if declared is None:
+                    self.fail(f"unknown variable {name!r}", statement.token)
+                if not mutable:
+                    self.fail(f"cannot assign to immutable let binding {name!r}; use var", statement.token)
+                target_type = declared
+            else:
+                base = target.children[0]
+                if base.kind != "name":
+                    self.fail("array assignment requires a mutable array variable", statement.token)
+                name = str(base.value)
+                declared = None
+                mutable = False
+                for scope in reversed(self.scopes):
+                    if name in scope:
+                        declared, mutable = scope[name]
+                        break
+                if declared is None:
+                    self.fail(f"unknown variable {name!r}", statement.token)
+                if not mutable:
+                    self.fail(f"cannot assign to an element of immutable let binding {name!r}", statement.token)
+                target_type = self.infer(target)
             actual = self.infer(statement.expression)
-            if actual != declared:
-                self.fail(f"cannot assign {actual} to {declared}", statement.token)
-            return self.line(f"v_{name} = {self.emit_expression(statement.expression)};")
+            if target_type.startswith("array:"):
+                self.fail("whole-array assignment is not supported", statement.token)
+            if actual != target_type:
+                self.fail(f"cannot assign {actual} to {target_type}", statement.token)
+            return self.line(
+                f"{self.emit_expression(target)} = {self.emit_expression(statement.expression)};"
+            )
         if statement.kind == "print":
             value_type = self.infer(statement.expression)
             value = self.emit_expression(statement.expression)
@@ -519,6 +733,11 @@ class Compiler:
             if value_type == "str":
                 return self.line(f'printf("%s\\n", {value});')
             self.fail("print cannot display a unit value", statement.token)
+        if statement.kind == "assert":
+            if self.infer(statement.expression) != "bool":
+                self.fail("assert condition must have type bool", statement.token)
+            expression = self.emit_expression(statement.expression)
+            return self.line(f"fluid_assert({expression}, {statement.token.line}, {statement.token.column});")
         if statement.kind == "return":
             if statement.expression is None:
                 if self.return_type != "unit":
@@ -530,6 +749,34 @@ class Compiler:
             return self.line(f"return {self.emit_expression(statement.expression)};")
         if statement.kind in {"break", "continue"}:
             return self.emit_control_flow(statement)
+        if statement.kind == "for":
+            name, start, end = statement.value
+            for label, expression in (("start", start), ("end", end)):
+                if self.infer(expression) != "i64":
+                    self.fail(f"for loop {label} must have type i64", expression.token)
+
+            range_id = self.range_counter
+            self.range_counter += 1
+            start_name = f"fluid_range_start_{range_id}"
+            end_name = f"fluid_range_end_{range_id}"
+
+            result = self.line("{")
+            self.indent += 1
+            result += self.line(f"long long {start_name} = {self.emit_expression(start)};")
+            result += self.line(f"long long {end_name} = {self.emit_expression(end)};")
+            self.scopes.append({name: ("i64", False)})
+            self.loop_depth += 1
+            try:
+                loop = self.line(
+                    f"for (long long v_{name} = {start_name}; "
+                    f"v_{name} < {end_name}; ++v_{name})"
+                )
+                result += loop + self.emit_block(statement.body)
+            finally:
+                self.loop_depth -= 1
+                self.scopes.pop()
+                self.indent -= 1
+            return result + self.line("}")
         if statement.kind in {"if", "while"}:
             if self.infer(statement.expression) != "bool":
                 self.fail(f"{statement.kind} condition must have type bool", statement.token)
@@ -551,6 +798,75 @@ class Compiler:
         output = [
             "#include <stdbool.h>",
             "#include <stdio.h>",
+            "#include <stddef.h>",
+            "#include <stdlib.h>",
+            "#include <string.h>",
+            "#include <limits.h>",
+            "#include <math.h>",
+            "",
+            "static long long fluid_abs_i64(long long value)",
+            "{",
+            "    if (value == LLONG_MIN) {",
+            '        fprintf(stderr, "fluid: abs overflow for i64 minimum\\n");',
+            "        exit(1);",
+            "    }",
+            "    return value < 0 ? -value : value;",
+            "}",
+            "static inline long long fluid_min_i64(long long left, long long right)",
+            "{",
+            "    return left < right ? left : right;",
+            "}",
+            "static inline long long fluid_max_i64(long long left, long long right)",
+            "{",
+            "    return left > right ? left : right;",
+            "}",
+            "static long long fluid_clamp_i64(long long value, long long lower, long long upper)",
+            "{",
+            "    if (lower > upper) {",
+            '        fprintf(stderr, "fluid: clamp lower bound exceeds upper bound\\n");',
+            "        exit(1);",
+            "    }",
+            "    return value < lower ? lower : (value > upper ? upper : value);",
+            "}",
+            "static inline long long fluid_sign_i64(long long value)",
+            "{",
+            "    return (value > 0) - (value < 0);",
+            "}",
+            "static inline bool fluid_contains(const char *text, const char *part)",
+            "{",
+            "    return strstr(text, part) != NULL;",
+            "}",
+            "static inline bool fluid_starts_with(const char *text, const char *prefix)",
+            "{",
+            "    return strncmp(text, prefix, strlen(prefix)) == 0;",
+            "}",
+            "static inline bool fluid_ends_with(const char *text, const char *suffix)",
+            "{",
+            "    size_t text_length = strlen(text);",
+            "    size_t suffix_length = strlen(suffix);",
+            "    return suffix_length <= text_length",
+            "        && memcmp(text + text_length - suffix_length, suffix, suffix_length) == 0;",
+            "}",
+            "static inline bool fluid_is_empty(const char *text)",
+            "{",
+            "    return text[0] == '\\0';",
+            "}",
+            "static void fluid_assert(bool condition, int line, int column)",
+            "{",
+            "    if (!condition) {",
+            '        fprintf(stderr, "fluid: assertion failed at %d:%d\\n", line, column);',
+            "        exit(1);",
+            "    }",
+            "}",
+            "",
+            "static size_t fluid_checked_index(long long index, size_t length, int line, int column)",
+            "{",
+            "    if (index < 0 || (unsigned long long)index >= length) {",
+            '        fprintf(stderr, "fluid: array index out of bounds at %d:%d\\n", line, column);',
+            "        exit(1);",
+            "    }",
+            "    return (size_t)index;",
+            "}",
             "",
         ]
         for function in self.functions:
@@ -568,6 +884,7 @@ class Compiler:
             self.return_type = function.return_type
             self.scopes = [{}]
             self.loop_depth = 0
+            self.range_counter = 0
             parameters = ", ".join(
                 f"{self.c_type(type_name)} v_{name}" for name, type_name in function.parameters
             ) or "void"
@@ -578,6 +895,12 @@ class Compiler:
                 self.scopes[0][name] = (type_name, False)
             for statement in function.body:
                 output.append(self.emit_statement(statement).rstrip("\n"))
+            self.validate_reachable(function.body)
+            if function.return_type != "unit" and not self.always_returns(function.body):
+                self.fail(
+                    f"function {function.name!r} may finish without returning {function.return_type}",
+                    function.token,
+                )
             if function.return_type == "unit":
                 output.append(self.line("return;").rstrip("\n"))
             output.append("}")
@@ -591,7 +914,7 @@ class Compiler:
 
 def parse_source(path: Path) -> str:
     try:
-        return path.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8-sig")
     except OSError as error:
         raise FluidError(f"cannot read {path}: {error}") from error
 
@@ -604,6 +927,17 @@ def compiler_command(override: str | None) -> list[str]:
         command = shlex.split(candidate, posix=os.name != "nt")
         executable = command[0]
         resolved = shutil.which(executable)
+        if not resolved and os.name == "nt" and not override:
+            executable_names = (executable, f"{executable}.exe") if not Path(executable).suffix else (executable,)
+            conventional_paths = (
+                base / "LLVM" / "bin" / name
+                for base in (
+                    Path(os.environ.get("ProgramFiles", "C:\\Program Files")),
+                    Path(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")),
+                )
+                for name in executable_names
+            )
+            resolved = next((str(path) for path in conventional_paths if path.is_file()), None)
         if resolved:
             command[0] = resolved
             return command
@@ -611,18 +945,34 @@ def compiler_command(override: str | None) -> list[str]:
     raise FluidError(f"native C compiler not found ({requested}); install one or pass --cc")
 
 
-def build_binary(c_source: str, output: Path, override: str | None) -> None:
+def native_compile_args(
+    command: list[str], source_file: Path, output: Path, native_tune: bool = False
+) -> list[str]:
+    compiler_name = Path(command[0]).name.lower()
+    is_msvc = compiler_name in {"cl", "cl.exe", "clang-cl", "clang-cl.exe"}
+    if is_msvc:
+        if native_tune:
+            raise FluidError("--native-tune is currently supported only with GCC or Clang")
+        return command + ["/nologo", "/O2", "/std:c11", f"/Fe:{output.resolve()}", str(source_file)]
+    args = command + ["-O3", "-std=c11"]
+    if native_tune:
+        args.append("-march=native")
+    args.extend([str(source_file), "-o", str(output.resolve())])
+    if os.name != "nt" or "gcc" in compiler_name:
+        args.append("-lm")
+    return args
+
+
+def build_binary(
+    c_source: str, output: Path, override: str | None, native_tune: bool = False
+) -> None:
     command = compiler_command(override)
-    is_msvc = Path(command[0]).name.lower() in {"cl", "cl.exe"}
     with tempfile.TemporaryDirectory(prefix="fluid-") as directory:
         work = Path(directory)
         source_file = work / "program.c"
         source_file.write_text(c_source, encoding="utf-8")
         output.parent.mkdir(parents=True, exist_ok=True)
-        if is_msvc:
-            args = command + ["/nologo", "/O2", "/std:c11", f"/Fe:{output.resolve()}", str(source_file)]
-        else:
-            args = command + ["-O3", "-std=c11", str(source_file), "-o", str(output.resolve())]
+        args = native_compile_args(command, source_file, output, native_tune)
         try:
             subprocess.run(args, check=True, cwd=work)
         except subprocess.CalledProcessError as error:
@@ -641,6 +991,11 @@ def create_parser() -> argparse.ArgumentParser:
             subparser.add_argument("-o", "--output", type=Path)
         if name in {"build", "run"}:
             subparser.add_argument("--cc", help="C compiler command (default: cc, clang, gcc, or cl)")
+            subparser.add_argument(
+                "--native-tune",
+                action="store_true",
+                help="optimize for the build machine CPU (GCC/Clang; less portable binaries)",
+            )
     return parser
 
 
@@ -660,13 +1015,13 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "build":
             output = args.output or args.source.with_suffix(".exe" if os.name == "nt" else "")
-            build_binary(c_source, output, args.cc)
+            build_binary(c_source, output, args.cc, args.native_tune)
             print(f"Built {output}")
             return 0
         if args.command == "run":
             with tempfile.TemporaryDirectory(prefix="fluid-run-") as directory:
                 output = Path(directory) / ("program.exe" if os.name == "nt" else "program")
-                build_binary(c_source, output, args.cc)
+                build_binary(c_source, output, args.cc, args.native_tune)
                 return subprocess.run([str(output)], check=False).returncode
     except FluidError as error:
         print(f"fluid: error: {error}", file=sys.stderr)
