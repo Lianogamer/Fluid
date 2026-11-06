@@ -2,6 +2,9 @@ fn main() -> i64 {
     let name: str = "Fluid";
     print("Hello from");
     print(name);
+    if name == "Fluid" {
+        print("String comparison works.");
+    }
 
     var count = 3;
     while count > 0 {

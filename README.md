@@ -51,9 +51,10 @@ inferred array literals, for example `let scores: [i64; 3] = [98, 87, 100];`.
 Array reads and mutable-array writes are bounds-checked at runtime. Array
 parameters, return values, nested arrays, and whole-array assignments are not
 supported yet. `int`, `float`, and `string` are aliases for `i64`, `f64`, and
-`str`. Function arguments and return types are explicit, while local types can be
-inferred or written after the variable name. Blocks use braces, statements end
-in semicolons, and `//` starts a comment.
+`str`. Strings support content-based `==` and `!=` comparisons. Function
+arguments and return types are explicit, while local types can be inferred or
+written after the variable name. Blocks use braces, statements end in
+semicolons, and `//` starts a comment.
 
 This is the foundation, not a finished replacement for mature systems
 languages: ownership, memory safety, modules, generics, a package manager,

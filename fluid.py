@@ -491,7 +491,7 @@ class Compiler:
                 if left == right == "bool":
                     return "bool"
             elif operator in {"==", "!="}:
-                if left == right and left in {"i64", "f64", "bool"}:
+                if left == right and left in {"i64", "f64", "bool", "str"}:
                     return "bool"
             elif operator in {"<", "<=", ">", ">="}:
                 if left == right and left in {"i64", "f64"}:
@@ -526,6 +526,9 @@ class Compiler:
             return f"({expression.value}{self.emit_expression(expression.children[0])})"
         if kind == "binary":
             left, right = (self.emit_expression(child) for child in expression.children)
+            if self.infer(expression.children[0]) == "str" and expression.value in {"==", "!="}:
+                comparison = f"strcmp({left}, {right})"
+                return f"({comparison} {'==' if expression.value == '==' else '!='} 0)"
             return f"({left} {expression.value} {right})"
         if kind == "index":
             array_type = self.infer(expression.children[0])
@@ -702,6 +705,7 @@ class Compiler:
             "#include <stdio.h>",
             "#include <stddef.h>",
             "#include <stdlib.h>",
+            "#include <string.h>",
             "",
             "static size_t fluid_checked_index(long long index, size_t length, int line, int column)",
             "{",

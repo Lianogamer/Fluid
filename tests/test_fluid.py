@@ -178,6 +178,25 @@ class FluidCompilerTests(unittest.TestCase):
                 "fn main() -> i64 { return 0; }"
             )
 
+    def test_string_equality_compares_contents(self):
+        result = self.compile_source(
+            'fn main() -> i64 { if "fluid" == "fluid" { return 1; } return 0; }'
+        )
+        self.assertIn("#include <string.h>", result)
+        self.assertIn('(strcmp("fluid", "fluid") == 0)', result)
+
+    def test_string_inequality_compares_contents(self):
+        result = self.compile_source(
+            'fn main() -> i64 { if "fluid" != "python" { return 1; } return 0; }'
+        )
+        self.assertIn('(strcmp("fluid", "python") != 0)', result)
+
+    def test_string_ordering_is_not_supported(self):
+        with self.assertRaisesRegex(FluidError, "cannot be used with str and str"):
+            self.compile_source(
+                'fn main() -> i64 { if "a" < "b" { return 1; } return 0; }'
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
