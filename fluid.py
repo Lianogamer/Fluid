@@ -260,6 +260,12 @@ class Parser:
             self.expect(")")
             self.expect(";")
             return Statement("print", None, expression, None, None, token)
+        if self.accept("assert"):
+            self.expect("(")
+            expression = self.parse_expression()
+            self.expect(")")
+            self.expect(";")
+            return Statement("assert", None, expression, None, None, token)
         if self.accept("return"):
             expression = None if self.current.value == ";" else self.parse_expression()
             self.expect(";")
@@ -379,10 +385,17 @@ class Compiler:
         "abs": (("i64",), "i64", "fluid_abs_i64"),
         "min": (("i64", "i64"), "i64", "fluid_min_i64"),
         "max": (("i64", "i64"), "i64", "fluid_max_i64"),
+        "clamp": (("i64", "i64", "i64"), "i64", "fluid_clamp_i64"),
+        "sign": (("i64",), "i64", "fluid_sign_i64"),
         "sqrt": (("f64",), "f64", "sqrt"),
+        "pow": (("f64", "f64"), "f64", "pow"),
+        "floor": (("f64",), "f64", "floor"),
+        "ceil": (("f64",), "f64", "ceil"),
+        "round": (("f64",), "f64", "round"),
         "contains": (("str", "str"), "bool", "fluid_contains"),
         "starts_with": (("str", "str"), "bool", "fluid_starts_with"),
         "ends_with": (("str", "str"), "bool", "fluid_ends_with"),
+        "is_empty": (("str",), "bool", "fluid_is_empty"),
     }
 
     C_TYPES = {
@@ -720,6 +733,11 @@ class Compiler:
             if value_type == "str":
                 return self.line(f'printf("%s\\n", {value});')
             self.fail("print cannot display a unit value", statement.token)
+        if statement.kind == "assert":
+            if self.infer(statement.expression) != "bool":
+                self.fail("assert condition must have type bool", statement.token)
+            expression = self.emit_expression(statement.expression)
+            return self.line(f"fluid_assert({expression}, {statement.token.line}, {statement.token.column});")
         if statement.kind == "return":
             if statement.expression is None:
                 if self.return_type != "unit":
@@ -802,6 +820,18 @@ class Compiler:
             "{",
             "    return left > right ? left : right;",
             "}",
+            "static long long fluid_clamp_i64(long long value, long long lower, long long upper)",
+            "{",
+            "    if (lower > upper) {",
+            '        fprintf(stderr, "fluid: clamp lower bound exceeds upper bound\\n");',
+            "        exit(1);",
+            "    }",
+            "    return value < lower ? lower : (value > upper ? upper : value);",
+            "}",
+            "static inline long long fluid_sign_i64(long long value)",
+            "{",
+            "    return (value > 0) - (value < 0);",
+            "}",
             "static inline bool fluid_contains(const char *text, const char *part)",
             "{",
             "    return strstr(text, part) != NULL;",
@@ -816,6 +846,17 @@ class Compiler:
             "    size_t suffix_length = strlen(suffix);",
             "    return suffix_length <= text_length",
             "        && memcmp(text + text_length - suffix_length, suffix, suffix_length) == 0;",
+            "}",
+            "static inline bool fluid_is_empty(const char *text)",
+            "{",
+            "    return text[0] == '\\0';",
+            "}",
+            "static void fluid_assert(bool condition, int line, int column)",
+            "{",
+            "    if (!condition) {",
+            '        fprintf(stderr, "fluid: assertion failed at %d:%d\\n", line, column);',
+            "        exit(1);",
+            "    }",
             "}",
             "",
             "static size_t fluid_checked_index(long long index, size_t length, int line, int column)",
@@ -873,7 +914,7 @@ class Compiler:
 
 def parse_source(path: Path) -> str:
     try:
-        return path.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8-sig")
     except OSError as error:
         raise FluidError(f"cannot read {path}: {error}") from error
 
@@ -886,6 +927,17 @@ def compiler_command(override: str | None) -> list[str]:
         command = shlex.split(candidate, posix=os.name != "nt")
         executable = command[0]
         resolved = shutil.which(executable)
+        if not resolved and os.name == "nt" and not override:
+            executable_names = (executable, f"{executable}.exe") if not Path(executable).suffix else (executable,)
+            conventional_paths = (
+                base / "LLVM" / "bin" / name
+                for base in (
+                    Path(os.environ.get("ProgramFiles", "C:\\Program Files")),
+                    Path(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")),
+                )
+                for name in executable_names
+            )
+            resolved = next((str(path) for path in conventional_paths if path.is_file()), None)
         if resolved:
             command[0] = resolved
             return command

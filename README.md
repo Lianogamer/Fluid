@@ -10,6 +10,14 @@ optimization; it does not yet establish that Fluid is faster than Rust or C++.
 - Python 3.10 or newer
 - A C compiler available on `PATH`: `cc`, `clang`, `gcc`, or Microsoft `cl`
 
+On Windows, install LLVM/Clang with:
+
+```powershell
+winget install --id LLVM.LLVM --exact
+```
+
+Open a new terminal after installation so the updated `PATH` is available.
+
 ## Try it
 
 ```text
@@ -17,6 +25,7 @@ python fluid.py check examples/hello.fl
 python fluid.py emit-c examples/hello.fl
 python fluid.py build examples/hello.fl
 python fluid.py run examples/hello.fl
+python fluid.py run examples/sum.fl --native-tune
 ```
 
 Use `-o program` with `build` to choose an output path, and `--cc "compiler
@@ -52,8 +61,10 @@ Array reads and mutable-array writes are bounds-checked at runtime. Array
 parameters, return values, nested arrays, and whole-array assignments are not
 supported yet. `int`, `float`, and `string` are aliases for `i64`, `f64`, and
 `str`. Strings support content-based `==` and `!=` comparisons. Built-ins
-include `len`, `abs`, `min`, `max`, `sqrt`, `contains`, `starts_with`, and
-`ends_with`. `len(string)` returns its UTF-8 byte length;
+include `len`, `abs`, `min`, `max`, `clamp`, `sign`, `sqrt`, `pow`, `floor`,
+`ceil`, `round`, `contains`, `starts_with`, `ends_with`, and `is_empty`.
+`assert(condition);` exits with a source-positioned diagnostic when the
+condition is false. `len(string)` returns its UTF-8 byte length;
 `len(array_variable)` returns the fixed element count at compile time.
 `abs(i64_min)` exits with an overflow diagnostic. Function arguments and return
 types are explicit, while local types can be inferred or written after the
@@ -65,6 +76,11 @@ accept `--native-tune` to add GCC/Clang's `-march=native`; this may improve
 performance on the build machine but creates binaries that may not run on older
 or different CPUs. The compiler automatically links the C math library where
 needed for `sqrt`.
+
+`examples/sum.fl` is a dependency-heavy CPU-loop sample for trying native
+builds. It is not a cross-language benchmark; compare optimized binaries using
+the same workload and your target machines before drawing performance
+conclusions.
 
 This is the foundation, not a finished replacement for mature systems
 languages: ownership, memory safety, modules, generics, a package manager,

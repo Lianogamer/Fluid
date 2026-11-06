@@ -23,9 +23,15 @@ fn main() -> i64 {
     print(abs(-7));
     print(min(3, 5));
     print(max(3, 5));
+    print(clamp(12, 0, 10));
+    print(sign(-7));
+    print(pow(2.0, 3.0));
     print(sqrt(9.0));
+    print(round(1.6));
     print(contains(name, "lui"));
     print(starts_with(name, "Fl"));
     print(ends_with(name, "id"));
+    print(is_empty(""));
+    assert(len(scores) == 3);
     return 0;
 }

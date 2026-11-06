@@ -1,7 +1,9 @@
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
-from fluid import Compiler, FluidError, Parser, native_compile_args
+from fluid import Compiler, FluidError, Parser, compiler_command, native_compile_args, parse_source
 
 
 class FluidCompilerTests(unittest.TestCase):
@@ -47,6 +49,14 @@ class FluidCompilerTests(unittest.TestCase):
     def test_comment_at_end_of_file_is_accepted(self):
         result = self.compile_source("fn main() -> i64 { return 0; } // final comment")
         self.assertIn("fluid_main", result)
+
+    def test_source_file_with_utf8_bom_is_accepted(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "bom.fl"
+            path.write_bytes(b"\xef\xbb\xbffn main() -> i64 { return 0; }")
+            source = parse_source(path)
+        self.assertIn("fn main()", source)
+        self.assertIn("fluid_main", self.compile_source(source))
 
     def test_non_unit_function_must_return_on_all_paths(self):
         with self.assertRaisesRegex(FluidError, "may finish without returning"):
@@ -251,12 +261,34 @@ class FluidCompilerTests(unittest.TestCase):
         self.assertIn("fluid_starts_with(\"fluid\", \"flu\")", result)
         self.assertIn("fluid_ends_with(\"fluid\", \"id\")", result)
 
+    def test_numeric_builtins_emit_clamp_sign_and_rounding_helpers(self):
+        result = self.compile_source(
+            "fn main() -> i64 { print(clamp(12, 0, 10)); print(sign(-7)); "
+            "print(pow(2.0, 3.0)); print(floor(1.9)); print(ceil(1.1)); "
+            "print(round(1.6)); return 0; }"
+        )
+        self.assertIn("fluid_clamp_i64(12LL, 0LL, 10LL)", result)
+        self.assertIn("fluid_sign_i64((-7LL))", result)
+        self.assertIn("pow(2.0, 3.0)", result)
+        self.assertIn("floor(1.9)", result)
+        self.assertIn("ceil(1.1)", result)
+        self.assertIn("round(1.6)", result)
+
+    def test_is_empty_string_builtin(self):
+        result = self.compile_source(
+            'fn main() -> i64 { print(is_empty("")); return 0; }'
+        )
+        self.assertIn("fluid_is_empty(\"\")", result)
+
     def test_builtins_check_arity_and_argument_types(self):
         cases = (
             ("abs()", "abs expects exactly 1 argument"),
             ("min(1)", "min expects exactly 2 argument"),
             ("sqrt(1)", "sqrt expects f64, got i64"),
+            ("clamp(1, 2)", "clamp expects exactly 3 argument"),
+            ("round(1)", "round expects f64, got i64"),
             ('contains("a", 1)', "contains expects str, got i64"),
+            ("is_empty(false)", "is_empty expects str, got bool"),
         )
         for expression, message in cases:
             with self.subTest(expression=expression):
@@ -289,6 +321,30 @@ class FluidCompilerTests(unittest.TestCase):
         run = create_parser().parse_args(["run", "main.fl", "--native-tune"])
         self.assertTrue(build.native_tune)
         self.assertTrue(run.native_tune)
+
+    def test_assert_statement_emits_runtime_check(self):
+        result = self.compile_source(
+            "fn main() -> i64 { assert(1 + 1 == 2); return 0; }"
+        )
+        self.assertIn("fluid_assert(((1LL + 1LL) == 2LL), 1, 20);", result)
+        self.assertIn("assertion failed at %d:%d", result)
+
+    def test_assert_condition_must_be_boolean(self):
+        with self.assertRaisesRegex(FluidError, "assert condition must have type bool"):
+            self.compile_source("fn main() -> i64 { assert(1); return 0; }")
+
+    def test_installed_llvm_is_discovered_from_default_windows_path(self):
+        llvm = Path("C:/Program Files/LLVM/bin/clang.exe")
+        with (
+            patch("fluid.os.name", "nt"),
+            patch("fluid.shutil.which", return_value=None),
+            patch.object(
+                Path, "is_file", autospec=True,
+                side_effect=lambda path: path.name == "clang.exe",
+            ),
+        ):
+            command = compiler_command(None)
+        self.assertEqual(command[0], str(llvm))
 
     def test_statement_after_return_is_rejected(self):
         with self.assertRaisesRegex(FluidError, "unreachable statement"):

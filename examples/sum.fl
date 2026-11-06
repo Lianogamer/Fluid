@@ -1,0 +1,10 @@
+fn main() -> i64 {
+    var checksum = 0;
+    for number in 0..5000000 {
+        checksum = (checksum * 1103515245 + number + 12345) % 2147483647;
+    }
+
+    assert(checksum == 726350334);
+    print(checksum);
+    return 0;
+}
