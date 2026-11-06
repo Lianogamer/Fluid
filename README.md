@@ -41,8 +41,10 @@ fn main() -> i64 {
 
 The current subset includes `i64`, `f64`, `bool`, `str`, and `unit`; immutable
 `let` and mutable `var` bindings; assignment to `var`; functions; arithmetic
-and comparisons; `if`/`else if`/`else`; `while` with `break` and `continue`;
-`print`; and `return`. `int`, `float`, and `string` are aliases for `i64`,
+and comparisons; `if`/`else if`/`else`; `while`; exclusive integer ranges
+with `for index in start..end`; `break` and `continue`; `print`; and `return`.
+Range bounds must be `i64` and are evaluated once, before the loop. The loop
+variable is immutable. `int`, `float`, and `string` are aliases for `i64`,
 `f64`, and `str`. Function arguments and return types are explicit, while
 local types can be inferred or written after the variable name. Blocks use
 braces, statements end in semicolons, and `//` starts a comment.

@@ -69,8 +69,55 @@ class FluidCompilerTests(unittest.TestCase):
     def test_break_and_continue_are_rejected_outside_while(self):
         for keyword in ("break", "continue"):
             with self.subTest(keyword=keyword):
-                with self.assertRaisesRegex(FluidError, "only valid inside a while loop"):
+                with self.assertRaisesRegex(FluidError, "only valid inside a loop"):
                     self.compile_source(f"fn main() -> i64 {{ {keyword}; return 0; }}")
+
+    def test_for_range_uses_i64_and_an_exclusive_end(self):
+        result = self.compile_source(
+            "fn main() -> i64 { for index in 2..5 { print(index); } return 0; }"
+        )
+        self.assertIn("for (long long v_index = fluid_range_start_0; "
+                      "v_index < fluid_range_end_0; ++v_index)", result)
+        self.assertIn('printf("%lld\\n", v_index);', result)
+
+    def test_float_literals_still_work_alongside_range_operator(self):
+        result = self.compile_source(
+            "fn main() -> i64 { print(.5); print(1.); "
+            "for index in 1..2 { print(index); } return 0; }"
+        )
+        self.assertIn('printf("%g\\n", .5);', result)
+        self.assertIn('printf("%g\\n", 1.);', result)
+
+    def test_for_range_evaluates_bounds_once(self):
+        result = self.compile_source(
+            "fn start() -> i64 { return 1; }"
+            "fn end() -> i64 { return 4; }"
+            "fn main() -> i64 { for index in start()..end() { print(index); } return 0; }"
+        )
+        self.assertEqual(result.count("= fluid_start();"), 1)
+        self.assertEqual(result.count("= fluid_end();"), 1)
+        self.assertLess(result.index("long long fluid_range_start_0 = fluid_start();"),
+                        result.index("long long fluid_range_end_0 = fluid_end();"))
+
+    def test_for_range_requires_integer_bounds(self):
+        with self.assertRaisesRegex(FluidError, "for loop start must have type i64"):
+            self.compile_source(
+                "fn main() -> i64 { for index in true..3 { print(index); } return 0; }"
+            )
+
+    def test_for_loop_variable_is_immutable(self):
+        with self.assertRaisesRegex(FluidError, "immutable let binding"):
+            self.compile_source(
+                "fn main() -> i64 { for index in 0..2 { index = 1; } return 0; }"
+            )
+
+    def test_break_and_continue_work_inside_for(self):
+        result = self.compile_source(
+            "fn main() -> i64 { for index in 0..3 { "
+            "if index == 1 { continue; } break; } return 0; }"
+        )
+        self.assertIn("continue;", result)
+        self.assertIn("break;", result)
 
 
 if __name__ == "__main__":

@@ -55,6 +55,11 @@ def tokenize(source: str) -> list[Token]:
             continue
 
         start_line, start_column = line, column
+        if source.startswith("..", i):
+            tokens.append(Token("symbol", "..", start_line, start_column))
+            i += 2
+            column += 2
+            continue
         if char == '"':
             start = i
             i += 1
@@ -82,7 +87,7 @@ def tokenize(source: str) -> list[Token]:
             tokens.append(Token("string", value, start_line, start_column))
             continue
 
-        number = re.match(r"(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)", source[i:])
+        number = re.match(r"(?:[0-9]+(?:\.(?!\.)[0-9]*)?|\.(?!\.)[0-9]+)", source[i:])
         if number:
             value = number.group(0)
             tokens.append(Token("number", value, start_line, start_column))
@@ -256,6 +261,13 @@ class Parser:
         if self.accept("while"):
             condition = self.parse_expression()
             return Statement("while", None, condition, self.parse_block(), None, token)
+        if self.accept("for"):
+            name = self.expect_identifier().value
+            self.expect("in")
+            start = self.parse_expression()
+            self.expect("..")
+            end = self.parse_expression()
+            return Statement("for", (name, start, end), None, self.parse_block(), None, token)
         if self.accept("break"):
             self.expect(";")
             return Statement("break", None, None, None, None, token)
@@ -342,6 +354,7 @@ class Compiler:
         self.return_type = "unit"
         self.indent = 0
         self.loop_depth = 0
+        self.range_counter = 0
         for function in functions:
             if function.name in self.function_map:
                 self.fail(f"function {function.name!r} is already defined", function.token)
@@ -462,7 +475,7 @@ class Compiler:
 
     def emit_control_flow(self, statement: Statement) -> str:
         if self.loop_depth == 0:
-            self.fail(f"{statement.kind} is only valid inside a while loop", statement.token)
+            self.fail(f"{statement.kind} is only valid inside a loop", statement.token)
         return self.line(f"{statement.kind};")
 
     @staticmethod
@@ -530,6 +543,34 @@ class Compiler:
             return self.line(f"return {self.emit_expression(statement.expression)};")
         if statement.kind in {"break", "continue"}:
             return self.emit_control_flow(statement)
+        if statement.kind == "for":
+            name, start, end = statement.value
+            for label, expression in (("start", start), ("end", end)):
+                if self.infer(expression) != "i64":
+                    self.fail(f"for loop {label} must have type i64", expression.token)
+
+            range_id = self.range_counter
+            self.range_counter += 1
+            start_name = f"fluid_range_start_{range_id}"
+            end_name = f"fluid_range_end_{range_id}"
+
+            result = self.line("{")
+            self.indent += 1
+            result += self.line(f"long long {start_name} = {self.emit_expression(start)};")
+            result += self.line(f"long long {end_name} = {self.emit_expression(end)};")
+            self.scopes.append({name: ("i64", False)})
+            self.loop_depth += 1
+            try:
+                loop = self.line(
+                    f"for (long long v_{name} = {start_name}; "
+                    f"v_{name} < {end_name}; ++v_{name})"
+                )
+                result += loop + self.emit_block(statement.body)
+            finally:
+                self.loop_depth -= 1
+                self.scopes.pop()
+                self.indent -= 1
+            return result + self.line("}")
         if statement.kind in {"if", "while"}:
             if self.infer(statement.expression) != "bool":
                 self.fail(f"{statement.kind} condition must have type bool", statement.token)
@@ -568,6 +609,7 @@ class Compiler:
             self.return_type = function.return_type
             self.scopes = [{}]
             self.loop_depth = 0
+            self.range_counter = 0
             parameters = ", ".join(
                 f"{self.c_type(type_name)} v_{name}" for name, type_name in function.parameters
             ) or "void"
