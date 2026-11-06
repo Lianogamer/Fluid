@@ -374,6 +374,17 @@ class Parser:
 
 
 class Compiler:
+    BUILTINS = {
+        "len": (None, "i64", None),
+        "abs": (("i64",), "i64", "fluid_abs_i64"),
+        "min": (("i64", "i64"), "i64", "fluid_min_i64"),
+        "max": (("i64", "i64"), "i64", "fluid_max_i64"),
+        "sqrt": (("f64",), "f64", "sqrt"),
+        "contains": (("str", "str"), "bool", "fluid_contains"),
+        "starts_with": (("str", "str"), "bool", "fluid_starts_with"),
+        "ends_with": (("str", "str"), "bool", "fluid_ends_with"),
+    }
+
     C_TYPES = {
         "i64": "long long",
         "f64": "double",
@@ -393,8 +404,8 @@ class Compiler:
         for function in functions:
             if function.name in self.function_map:
                 self.fail(f"function {function.name!r} is already defined", function.token)
-            if function.name == "len":
-                self.fail("'len' is reserved for the built-in length function", function.token)
+            if function.name in self.BUILTINS:
+                self.fail(f"{function.name!r} is reserved for a built-in function", function.token)
             parameter_names = [name for name, _ in function.parameters]
             if len(parameter_names) != len(set(parameter_names)):
                 self.fail("function parameter names must be unique", function.token)
@@ -469,18 +480,28 @@ class Compiler:
             return self.lookup(str(expression.value), expression.token)
         if expression.kind == "call":
             name = str(expression.value)
-            if name == "len":
-                if len(expression.children) != 1:
-                    self.fail("len expects exactly one argument", expression.token)
-                argument = expression.children[0]
-                argument_type = self.infer(argument)
-                if argument_type == "str":
-                    return "i64"
-                if self.array_type_parts(argument_type) is not None and argument.kind == "name":
-                    return "i64"
-                if self.array_type_parts(argument_type) is not None:
-                    self.fail("len of an array requires an array variable", argument.token)
-                self.fail(f"len does not accept values of type {argument_type}", argument.token)
+            builtin = self.BUILTINS.get(name)
+            if builtin is not None:
+                expected_types, result_type, _ = builtin
+                if name == "len":
+                    if len(expression.children) != 1:
+                        self.fail("len expects exactly one argument", expression.token)
+                    argument = expression.children[0]
+                    argument_type = self.infer(argument)
+                    if argument_type == "str":
+                        return "i64"
+                    if self.array_type_parts(argument_type) is not None and argument.kind == "name":
+                        return "i64"
+                    if self.array_type_parts(argument_type) is not None:
+                        self.fail("len of an array requires an array variable", argument.token)
+                    self.fail(f"len does not accept values of type {argument_type}", argument.token)
+                if len(expression.children) != len(expected_types):
+                    self.fail(f"{name} expects exactly {len(expected_types)} argument(s)", expression.token)
+                for argument, expected in zip(expression.children, expected_types):
+                    actual = self.infer(argument)
+                    if actual != expected:
+                        self.fail(f"{name} expects {expected}, got {actual}", argument.token)
+                return result_type
             function = self.function_map.get(name)
             if function is None:
                 self.fail(f"unknown function {name!r}", expression.token)
@@ -534,13 +555,19 @@ class Compiler:
         if kind == "name":
             return f"v_{expression.value}"
         if kind == "call":
-            if expression.value == "len":
+            name = str(expression.value)
+            if name == "len":
                 argument = expression.children[0]
                 argument_type = self.infer(argument)
                 array = self.array_type_parts(argument_type)
                 if array is not None:
                     return f"{array[1]}LL"
                 return f"((long long)strlen({self.emit_expression(argument)}))"
+            builtin = self.BUILTINS.get(name)
+            if builtin is not None:
+                _, _, c_name = builtin
+                arguments = ", ".join(self.emit_expression(arg) for arg in expression.children)
+                return f"{c_name}({arguments})"
             arguments = ", ".join(self.emit_expression(arg) for arg in expression.children)
             return f"fluid_{expression.value}({arguments})"
         if kind == "unary":
@@ -756,6 +783,40 @@ class Compiler:
             "#include <stddef.h>",
             "#include <stdlib.h>",
             "#include <string.h>",
+            "#include <limits.h>",
+            "#include <math.h>",
+            "",
+            "static long long fluid_abs_i64(long long value)",
+            "{",
+            "    if (value == LLONG_MIN) {",
+            '        fprintf(stderr, "fluid: abs overflow for i64 minimum\\n");',
+            "        exit(1);",
+            "    }",
+            "    return value < 0 ? -value : value;",
+            "}",
+            "static inline long long fluid_min_i64(long long left, long long right)",
+            "{",
+            "    return left < right ? left : right;",
+            "}",
+            "static inline long long fluid_max_i64(long long left, long long right)",
+            "{",
+            "    return left > right ? left : right;",
+            "}",
+            "static inline bool fluid_contains(const char *text, const char *part)",
+            "{",
+            "    return strstr(text, part) != NULL;",
+            "}",
+            "static inline bool fluid_starts_with(const char *text, const char *prefix)",
+            "{",
+            "    return strncmp(text, prefix, strlen(prefix)) == 0;",
+            "}",
+            "static inline bool fluid_ends_with(const char *text, const char *suffix)",
+            "{",
+            "    size_t text_length = strlen(text);",
+            "    size_t suffix_length = strlen(suffix);",
+            "    return suffix_length <= text_length",
+            "        && memcmp(text + text_length - suffix_length, suffix, suffix_length) == 0;",
+            "}",
             "",
             "static size_t fluid_checked_index(long long index, size_t length, int line, int column)",
             "{",
@@ -832,18 +893,34 @@ def compiler_command(override: str | None) -> list[str]:
     raise FluidError(f"native C compiler not found ({requested}); install one or pass --cc")
 
 
-def build_binary(c_source: str, output: Path, override: str | None) -> None:
+def native_compile_args(
+    command: list[str], source_file: Path, output: Path, native_tune: bool = False
+) -> list[str]:
+    compiler_name = Path(command[0]).name.lower()
+    is_msvc = compiler_name in {"cl", "cl.exe", "clang-cl", "clang-cl.exe"}
+    if is_msvc:
+        if native_tune:
+            raise FluidError("--native-tune is currently supported only with GCC or Clang")
+        return command + ["/nologo", "/O2", "/std:c11", f"/Fe:{output.resolve()}", str(source_file)]
+    args = command + ["-O3", "-std=c11"]
+    if native_tune:
+        args.append("-march=native")
+    args.extend([str(source_file), "-o", str(output.resolve())])
+    if os.name != "nt" or "gcc" in compiler_name:
+        args.append("-lm")
+    return args
+
+
+def build_binary(
+    c_source: str, output: Path, override: str | None, native_tune: bool = False
+) -> None:
     command = compiler_command(override)
-    is_msvc = Path(command[0]).name.lower() in {"cl", "cl.exe"}
     with tempfile.TemporaryDirectory(prefix="fluid-") as directory:
         work = Path(directory)
         source_file = work / "program.c"
         source_file.write_text(c_source, encoding="utf-8")
         output.parent.mkdir(parents=True, exist_ok=True)
-        if is_msvc:
-            args = command + ["/nologo", "/O2", "/std:c11", f"/Fe:{output.resolve()}", str(source_file)]
-        else:
-            args = command + ["-O3", "-std=c11", str(source_file), "-o", str(output.resolve())]
+        args = native_compile_args(command, source_file, output, native_tune)
         try:
             subprocess.run(args, check=True, cwd=work)
         except subprocess.CalledProcessError as error:
@@ -862,6 +939,11 @@ def create_parser() -> argparse.ArgumentParser:
             subparser.add_argument("-o", "--output", type=Path)
         if name in {"build", "run"}:
             subparser.add_argument("--cc", help="C compiler command (default: cc, clang, gcc, or cl)")
+            subparser.add_argument(
+                "--native-tune",
+                action="store_true",
+                help="optimize for the build machine CPU (GCC/Clang; less portable binaries)",
+            )
     return parser
 
 
@@ -881,13 +963,13 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "build":
             output = args.output or args.source.with_suffix(".exe" if os.name == "nt" else "")
-            build_binary(c_source, output, args.cc)
+            build_binary(c_source, output, args.cc, args.native_tune)
             print(f"Built {output}")
             return 0
         if args.command == "run":
             with tempfile.TemporaryDirectory(prefix="fluid-run-") as directory:
                 output = Path(directory) / ("program.exe" if os.name == "nt" else "program")
-                build_binary(c_source, output, args.cc)
+                build_binary(c_source, output, args.cc, args.native_tune)
                 return subprocess.run([str(output)], check=False).returncode
     except FluidError as error:
         print(f"fluid: error: {error}", file=sys.stderr)

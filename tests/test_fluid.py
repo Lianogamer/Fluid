@@ -1,6 +1,7 @@
 import unittest
+from pathlib import Path
 
-from fluid import Compiler, FluidError, Parser
+from fluid import Compiler, FluidError, Parser, native_compile_args
 
 
 class FluidCompilerTests(unittest.TestCase):
@@ -225,9 +226,69 @@ class FluidCompilerTests(unittest.TestCase):
                 "fn main() -> i64 { print(len([value(), value()])); return 0; }"
             )
 
-    def test_len_is_reserved_for_builtin(self):
+    def test_builtin_names_are_reserved(self):
         with self.assertRaisesRegex(FluidError, "len.*reserved"):
             self.compile_source("fn len(value: str) -> i64 { return 0; } fn main() -> i64 { return 0; }")
+
+    def test_numeric_builtins_emit_native_helpers(self):
+        result = self.compile_source(
+            "fn main() -> i64 { print(abs(-5)); print(min(3, 7)); "
+            "print(max(3, 7)); print(sqrt(9.0)); return 0; }"
+        )
+        self.assertIn("fluid_abs_i64((-5LL))", result)
+        self.assertIn("fluid_min_i64(3LL, 7LL)", result)
+        self.assertIn("fluid_max_i64(3LL, 7LL)", result)
+        self.assertIn("sqrt(9.0)", result)
+        self.assertIn("value == LLONG_MIN", result)
+
+    def test_string_builtins_emit_native_helpers(self):
+        result = self.compile_source(
+            'fn main() -> i64 { print(contains("fluid", "lu")); '
+            'print(starts_with("fluid", "flu")); '
+            'print(ends_with("fluid", "id")); return 0; }'
+        )
+        self.assertIn("fluid_contains(\"fluid\", \"lu\")", result)
+        self.assertIn("fluid_starts_with(\"fluid\", \"flu\")", result)
+        self.assertIn("fluid_ends_with(\"fluid\", \"id\")", result)
+
+    def test_builtins_check_arity_and_argument_types(self):
+        cases = (
+            ("abs()", "abs expects exactly 1 argument"),
+            ("min(1)", "min expects exactly 2 argument"),
+            ("sqrt(1)", "sqrt expects f64, got i64"),
+            ('contains("a", 1)', "contains expects str, got i64"),
+        )
+        for expression, message in cases:
+            with self.subTest(expression=expression):
+                with self.assertRaisesRegex(FluidError, message):
+                    self.compile_source(f"fn main() -> i64 {{ print({expression}); return 0; }}")
+
+    def test_gcc_native_tuning_is_opt_in(self):
+        source = Path("program.c")
+        output = Path("program")
+        standard = native_compile_args(["gcc"], source, output)
+        tuned = native_compile_args(["gcc"], source, output, native_tune=True)
+        self.assertNotIn("-march=native", standard)
+        self.assertIn("-O3", standard)
+        self.assertIn("-lm", standard)
+        self.assertGreater(standard.index("-lm"), standard.index(str(source)))
+        self.assertIn("-march=native", tuned)
+
+    def test_msvc_native_tuning_reports_unsupported_mode(self):
+        with self.assertRaisesRegex(FluidError, "only with GCC or Clang"):
+            native_compile_args(["cl.exe"], Path("program.c"), Path("program.exe"), native_tune=True)
+        self.assertNotIn(
+            "-lm",
+            native_compile_args(["clang-cl.exe"], Path("program.c"), Path("program.exe")),
+        )
+
+    def test_native_tune_flag_is_available_for_build_and_run(self):
+        from fluid import create_parser
+
+        build = create_parser().parse_args(["build", "main.fl", "--native-tune"])
+        run = create_parser().parse_args(["run", "main.fl", "--native-tune"])
+        self.assertTrue(build.native_tune)
+        self.assertTrue(run.native_tune)
 
     def test_statement_after_return_is_rejected(self):
         with self.assertRaisesRegex(FluidError, "unreachable statement"):

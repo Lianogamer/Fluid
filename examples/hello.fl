@@ -20,5 +20,12 @@ fn main() -> i64 {
     print(len(scores));
     print(scores[0]);
     print(len(name));
+    print(abs(-7));
+    print(min(3, 5));
+    print(max(3, 5));
+    print(sqrt(9.0));
+    print(contains(name, "lui"));
+    print(starts_with(name, "Fl"));
+    print(ends_with(name, "id"));
     return 0;
 }

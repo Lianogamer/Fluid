@@ -51,11 +51,20 @@ inferred array literals, for example `let scores: [i64; 3] = [98, 87, 100];`.
 Array reads and mutable-array writes are bounds-checked at runtime. Array
 parameters, return values, nested arrays, and whole-array assignments are not
 supported yet. `int`, `float`, and `string` are aliases for `i64`, `f64`, and
-`str`. Strings support content-based `==` and `!=` comparisons. `len(string)`
-returns its UTF-8 byte length; `len(array_variable)` returns the fixed element
-count at compile time. Function arguments and return types are explicit, while
-local types can be inferred or written after the variable name. Blocks use
-braces, statements end in semicolons, and `//` starts a comment.
+`str`. Strings support content-based `==` and `!=` comparisons. Built-ins
+include `len`, `abs`, `min`, `max`, `sqrt`, `contains`, `starts_with`, and
+`ends_with`. `len(string)` returns its UTF-8 byte length;
+`len(array_variable)` returns the fixed element count at compile time.
+`abs(i64_min)` exits with an overflow diagnostic. Function arguments and return
+types are explicit, while local types can be inferred or written after the
+variable name. Blocks use braces, statements end in semicolons, and `//` starts
+a comment.
+
+The native build uses optimization level 3 by default. `build` and `run`
+accept `--native-tune` to add GCC/Clang's `-march=native`; this may improve
+performance on the build machine but creates binaries that may not run on older
+or different CPUs. The compiler automatically links the C math library where
+needed for `sqrt`.
 
 This is the foundation, not a finished replacement for mature systems
 languages: ownership, memory safety, modules, generics, a package manager,
