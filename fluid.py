@@ -574,6 +574,35 @@ class Compiler:
                 return True
         return False
 
+    @staticmethod
+    def always_terminates(statements: list[Statement]) -> bool:
+        for statement in statements:
+            if statement.kind in {"return", "break", "continue"}:
+                return True
+            if (statement.kind == "if" and statement.alternative is not None
+                    and Compiler.always_terminates(statement.body)
+                    and Compiler.always_terminates(statement.alternative)):
+                return True
+        return False
+
+    def validate_reachable(self, statements: list[Statement]) -> None:
+        terminated = False
+        for statement in statements:
+            if terminated:
+                self.fail("unreachable statement", statement.token)
+            if statement.kind == "if":
+                self.validate_reachable(statement.body)
+                if statement.alternative is not None:
+                    self.validate_reachable(statement.alternative)
+                    terminated = (
+                        self.always_terminates(statement.body)
+                        and self.always_terminates(statement.alternative)
+                    )
+            elif statement.kind in {"while", "for"}:
+                self.validate_reachable(statement.body)
+            elif statement.kind in {"return", "break", "continue"}:
+                terminated = True
+
     def emit_statement(self, statement: Statement) -> str:
         if statement.kind in {"let", "var"}:
             name, annotation = statement.value
@@ -743,6 +772,12 @@ class Compiler:
                 self.scopes[0][name] = (type_name, False)
             for statement in function.body:
                 output.append(self.emit_statement(statement).rstrip("\n"))
+            self.validate_reachable(function.body)
+            if function.return_type != "unit" and not self.always_returns(function.body):
+                self.fail(
+                    f"function {function.name!r} may finish without returning {function.return_type}",
+                    function.token,
+                )
             if function.return_type == "unit":
                 output.append(self.line("return;").rstrip("\n"))
             output.append("}")

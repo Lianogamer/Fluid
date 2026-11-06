@@ -61,7 +61,8 @@ class FluidCompilerTests(unittest.TestCase):
 
     def test_break_and_continue_work_inside_while(self):
         result = self.compile_source(
-            "fn main() -> i64 { while true { continue; break; } return 0; }"
+            "fn main() -> i64 { while true { continue; } "
+            "while true { break; } return 0; }"
         )
         self.assertIn("        continue;", result)
         self.assertIn("        break;", result)
@@ -195,6 +196,32 @@ class FluidCompilerTests(unittest.TestCase):
         with self.assertRaisesRegex(FluidError, "cannot be used with str and str"):
             self.compile_source(
                 'fn main() -> i64 { if "a" < "b" { return 1; } return 0; }'
+            )
+
+    def test_statement_after_return_is_rejected(self):
+        with self.assertRaisesRegex(FluidError, "unreachable statement"):
+            self.compile_source("fn main() -> i64 { return 0; print(1); }")
+
+    def test_statement_after_fully_returning_if_else_is_rejected(self):
+        with self.assertRaisesRegex(FluidError, "unreachable statement"):
+            self.compile_source(
+                "fn main() -> i64 { if true { return 1; } "
+                "else { return 2; } return 3; }"
+            )
+
+    def test_statement_after_break_or_continue_is_rejected(self):
+        for keyword in ("break", "continue"):
+            with self.subTest(keyword=keyword):
+                with self.assertRaisesRegex(FluidError, "unreachable statement"):
+                    self.compile_source(
+                        f"fn main() -> i64 {{ while true {{ {keyword}; print(1); }} return 0; }}"
+                    )
+
+    def test_statement_after_loop_with_terminating_if_else_is_rejected(self):
+        with self.assertRaisesRegex(FluidError, "unreachable statement"):
+            self.compile_source(
+                "fn main() -> i64 { while true { "
+                "if true { break; } else { continue; } print(1); } return 0; }"
             )
 
 
