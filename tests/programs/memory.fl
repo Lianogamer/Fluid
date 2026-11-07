@@ -1,0 +1,69 @@
+fn sum(values: &[i64]) -> i64 {
+    var total = 0;
+    for index in 0..len(values) {
+        total = total + values[index];
+    }
+    return total;
+}
+
+fn increment(values: &mut [i64]) -> unit {
+    for index in 0..len(values) {
+        values[index] = values[index] + 1;
+    }
+}
+
+fn consume(values: move [i64]) -> i64 {
+    return sum(values);
+}
+
+fn test_vector_operations() -> unit {
+    var values: [i64] = [];
+    reserve(values, 8);
+    assert(capacity(values) >= 8);
+    push(values, 1);
+    push(values, 2);
+    push(values, 3);
+    insert(values, 1, 9);
+    assert(remove(values, 2) == 2);
+    assert(pop(values) == 3);
+    push(values, 4);
+    assert(sum(values) == 14);
+
+    if true {
+        let view = slice(values, 0, len(values));
+        assert(sum(view) == 14);
+    }
+
+    increment(values);
+    assert(sum(values) == 17);
+    shrink_to_fit(values);
+    assert(capacity(values) == len(values));
+    let retained_capacity = capacity(values);
+    clear(values);
+    assert(len(values) == 0);
+    assert(capacity(values) == retained_capacity);
+}
+
+fn test_arenas() -> unit {
+    var memory = arena();
+    var numbers = arena_i64(memory, 2);
+    var flags = arena_bool(memory, 2);
+    var labels = arena_str(memory, 1);
+    numbers[0] = 7;
+    numbers[1] = 8;
+    flags[1] = true;
+    labels[0] = "worker";
+    assert(numbers[0] + numbers[1] == 15);
+    assert(flags[0] == false);
+    assert(flags[1]);
+    assert(labels[0] == "worker");
+}
+
+fn main() -> i64 {
+    test_vector_operations();
+    test_arenas();
+    var owned: [i64] = [7, 8];
+    assert(consume(move owned) == 15);
+    print("PASS: memory");
+    return 0;
+}

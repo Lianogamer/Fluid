@@ -1,0 +1,134 @@
+fn main() -> i64 {
+    var app = window_create("Fluid UI demo – buttons, mouse, and drawing", 900, 600);
+    window_add_button(app, 1, "Toggle color", 56, 164, 132, 34);
+    window_add_button(app, 2, "Reset square", 198, 164, 132, 34);
+    window_add_checkbox(app, 3, "Show circle", 346, 164, 132, 34);
+    window_add_button(app, 4, "Exit", 494, 164, 100, 34);
+    window_add_textbox(app, 5, "Type something", 610, 164, 220, 34);
+    window_add_button(app, 6, "Clear text", 610, 208, 100, 30);
+    window_add_label(app, 7, "Ready", 56, 440, 400, 28);
+    window_add_label(app, 8, "Text: Type something", 56, 470, 600, 28);
+    window_set_checkbox_checked(app, 3, true);
+    window_show(app);
+
+    var square_x = 410;
+    var square_y = 250;
+    var square_color = 3368703;
+    var click_count = 0;
+    var show_circle = true;
+
+    window_clear(app, 15790320);
+    window_fill_rect(app, 28, 28, 844, 544, 16777215);
+    window_draw_rect(app, 28, 28, 844, 544, 3158064);
+    window_draw_text(app, 56, 52, "FLUID / NATIVE UI", 3158064);
+    window_draw_text(app, 56, 84, "Move the mouse or use the wheel to move the square.", 6316128);
+    window_draw_text(app, 56, 108, "Use the native buttons above. Close with Exit or the title bar.", 6316128);
+    window_draw_line(app, 56, 138, 844, 138, 1381653);
+    window_fill_ellipse(app, 720, 385, 92, 92, 15790320);
+    window_draw_ellipse(app, 720, 385, 92, 92, 1381653);
+    window_fill_rect(app, square_x, square_y, 60, 60, square_color);
+    window_draw_rect(app, square_x, square_y, 60, 60, 3158064);
+    window_present(app);
+
+    while window_is_open(app) {
+        if !window_wait(app) {
+            break;
+        }
+        let event = window_next_event(app);
+
+        if event.kind == event_close() {
+            break;
+        }
+
+        if event.kind == event_mouse_move() {
+            let next_x = clamp(event.x - 30, 56, 620);
+            let next_y = clamp(event.y - 30, 180, 430);
+            if next_x != square_x || next_y != square_y {
+                window_fill_rect(app, square_x, square_y, 60, 60, 16777215);
+                window_present_rect(app, square_x, square_y, 60, 60);
+                square_x = next_x;
+                square_y = next_y;
+                window_fill_rect(app, square_x, square_y, 60, 60, square_color);
+                window_draw_rect(app, square_x, square_y, 60, 60, 3158064);
+                window_present_rect(app, square_x, square_y, 60, 60);
+            }
+        }
+
+        if event.kind == event_mouse_wheel() {
+            let next_y = clamp(square_y - event.delta / 3, 180, 430);
+            if next_y != square_y {
+                window_fill_rect(app, square_x, square_y, 60, 60, 16777215);
+                window_present_rect(app, square_x, square_y, 60, 60);
+                square_y = next_y;
+                window_fill_rect(app, square_x, square_y, 60, 60, square_color);
+                window_draw_rect(app, square_x, square_y, 60, 60, 3158064);
+                window_present_rect(app, square_x, square_y, 60, 60);
+            }
+        }
+
+        if event.kind == event_control() {
+            if event.control_id == 1 {
+                click_count = click_count + 1;
+                if click_count % 2 == 0 {
+                    square_color = 3368703;
+                    window_set_control_text(app, 7, "Square color: blue");
+                } else {
+                    square_color = 16733440;
+                    window_set_control_text(app, 7, "Square color: orange");
+                }
+                window_fill_rect(app, square_x, square_y, 60, 60, square_color);
+                window_draw_rect(app, square_x, square_y, 60, 60, 3158064);
+                window_present_rect(app, square_x, square_y, 60, 60);
+            }
+            if event.control_id == 2 {
+                let position_changed = square_x != 410 || square_y != 250;
+                let color_changed = square_color != 3368703;
+                if position_changed {
+                    window_fill_rect(app, square_x, square_y, 60, 60, 16777215);
+                    window_present_rect(app, square_x, square_y, 60, 60);
+                    square_x = 410;
+                    square_y = 250;
+                }
+                if color_changed {
+                    square_color = 3368703;
+                }
+                if position_changed || color_changed {
+                    window_fill_rect(app, square_x, square_y, 60, 60, square_color);
+                    window_draw_rect(app, square_x, square_y, 60, 60, 3158064);
+                    window_present_rect(app, square_x, square_y, 60, 60);
+                }
+                window_set_control_text(app, 7, "Square reset");
+            }
+            if event.control_id == 3 {
+                if show_circle != event.checked {
+                    show_circle = event.checked;
+                    window_fill_rect(app, 720, 385, 92, 92, 16777215);
+                    if show_circle {
+                        window_set_control_text(app, 7, "Circle shown");
+                        window_fill_ellipse(app, 720, 385, 92, 92, 15790320);
+                        window_draw_ellipse(app, 720, 385, 92, 92, 1381653);
+                    } else {
+                        window_set_control_text(app, 7, "Circle hidden");
+                    }
+                    window_present_rect(app, 720, 385, 92, 92);
+                }
+            }
+            if event.control_id == 4 {
+                window_close(app);
+                break;
+            }
+            if event.control_id == 5 {
+                let text = window_textbox_text(app, 5);
+                window_set_control_text(app, 8, text);
+            }
+            if event.control_id == 6 {
+                window_set_textbox_text(app, 5, "");
+                window_set_control_text(app, 8, "Text: ");
+            }
+        }
+
+    }
+
+    print("PASS: ui demo closed");
+    return 0;
+}

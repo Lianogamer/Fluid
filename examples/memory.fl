@@ -1,0 +1,53 @@
+struct Point { x: i64, y: i64 }
+
+fn sum(values: &[i64]) -> i64 {
+    var total = 0;
+    for index in 0..len(values) {
+        total = total + values[index];
+    }
+    return total;
+}
+
+fn increment(values: &mut [i64]) -> unit {
+    for index in 0..len(values) {
+        values[index] = values[index] + 1;
+    }
+}
+
+fn consume(values: move [i64]) -> i64 {
+    return sum(values);
+}
+
+fn main() -> i64 {
+    var squares: [i64] = [];
+    reserve(squares, 8);
+    for value in 1..6 {
+        push(squares, value * value);
+    }
+
+    insert(squares, 2, 8);
+    let removed = remove(squares, 4);
+    print(removed);
+    shrink_to_fit(squares);
+
+    print(len(squares));
+    print(capacity(squares));
+
+    if true {
+        let view = slice(squares, 0, len(squares));
+        print(sum(view));
+    }
+    increment(squares);
+    print(sum(squares));
+
+    let point = Point { x: 3, y: 4 };
+    print(point.x + point.y);
+
+    var scratch = arena();
+    var work = arena_i64(scratch, 4);
+    work[0] = 11;
+    print(work[0]);
+
+    print(consume(move squares));
+    return 0;
+}

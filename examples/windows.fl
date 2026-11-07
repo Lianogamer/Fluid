@@ -1,0 +1,16 @@
+fn main() -> i64 {
+    var app = window_create("Fluid native window", 800, 600);
+    window_set_title(app, "Fluid: move and resize");
+    window_move(app, 120, 100);
+    window_resize(app, 800, 600);
+    window_show(app);
+
+    while window_wait(app) {
+        let event = window_next_event(app);
+        if event.kind == event_close() {
+            break;
+        }
+    }
+
+    return 0;
+}

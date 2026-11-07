@@ -1,0 +1,52 @@
+fn main() -> i64 {
+    var app = window_create("Fluid window test – 窗口", 320, 200);
+    window_set_title(app, "Fluid moved – 窗口");
+    window_add_button(app, 1, "OK", 10, 10, 80, 24);
+    window_add_checkbox(app, 2, "Check me", 100, 10, 100, 24);
+    window_add_label(app, 3, "Native label", 210, 10, 100, 24);
+    window_add_textbox(app, 4, "Initial", 10, 45, 180, 28);
+    window_set_control_text(app, 3, "Updated label");
+    window_set_control_enabled(app, 1, false);
+    window_set_control_enabled(app, 1, true);
+    assert(!window_checkbox_checked(app, 2));
+    window_set_checkbox_checked(app, 2, true);
+    assert(window_checkbox_checked(app, 2));
+    window_show(app);
+    window_move(app, 40, 50);
+    window_resize(app, 640, 480);
+
+    assert(window_is_open(app));
+    assert(window_x(app) == 40);
+    assert(window_y(app) == 50);
+    assert(window_width(app) == 640);
+    assert(window_height(app) == 480);
+    assert(window_poll(app));
+
+    let event = window_next_event(app);
+    assert(event.kind == event_resize());
+    assert(event.width == 640);
+    assert(event.height == 480);
+    window_set_textbox_text(app, 4, "Updated");
+    let text = window_textbox_text(app, 4);
+    assert(text == "Updated");
+    let edit_event = window_next_event(app);
+    assert(edit_event.kind == event_control());
+    assert(edit_event.control_id == 4);
+
+    window_clear(app, 16777215);
+    window_fill_rect(app, 10, 20, 40, 50, 16711680);
+    window_draw_rect(app, 5, 6, 70, 80, 255);
+    window_draw_line(app, 0, 0, 100, 100, 65280);
+    window_draw_text(app, 12, 14, "Fluid", 0);
+    window_present(app);
+    window_fill_rect(app, 20, 30, 25, 25, 255);
+    window_present_rect(app, 20, 30, 25, 25);
+
+    window_hide(app);
+    window_show(app);
+    window_close(app);
+    assert(!window_is_open(app));
+    assert(!window_poll(app));
+    print("PASS: windows");
+    return 0;
+}

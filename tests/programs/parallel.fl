@@ -1,0 +1,36 @@
+fn checksum(values: &[i64]) -> i64 {
+    var total = 0;
+    for index in 0..len(values) {
+        total = total + values[index];
+    }
+    return total;
+}
+
+fn transform(input: &[i64], output: &mut [i64]) -> i64 {
+    parallel for index in 0..len(input) {
+        var scratch = arena_i64(worker_arena(), 1);
+        scratch[0] = input[index] * 3;
+        output[index] = scratch[0];
+    }
+    parallel for index in 0..0 {
+        output[index] = 1;
+    }
+    return checksum(output);
+}
+
+fn main() -> i64 {
+    var input: [i64] = [];
+    var output: [i64] = [];
+    for index in 0..1024 {
+        push(input, index);
+        push(output, 0);
+    }
+
+    let expected = 3 * 1024 * 1023 / 2;
+    assert(transform(input, output) == expected);
+    assert(output[0] == 0);
+    assert(output[512] == 1536);
+    assert(output[1023] == 3069);
+    print("PASS: parallel");
+    return 0;
+}

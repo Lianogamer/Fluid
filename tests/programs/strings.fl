@@ -1,0 +1,16 @@
+fn byte_length(value: &String) -> i64 {
+    return len(value);
+}
+
+fn main() -> i64 {
+    var text = string_from("h\u00e9");
+    string_append(text, "llo");
+    let copy = string_clone(text);
+    let tail = string_slice(copy, 4, 6);
+    let expected = string_from("lo");
+    assert(byte_length(text) == 6);
+    assert(tail == expected);
+    assert(text == copy);
+    print(tail);
+    return 0;
+}

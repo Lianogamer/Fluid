@@ -1,0 +1,7 @@
+fn main() -> i64 {
+    var counter = 0;
+    parallel for index in 0..4 {
+        counter = counter + index;
+    }
+    return 0;
+}

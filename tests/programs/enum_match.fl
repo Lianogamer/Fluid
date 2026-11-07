@@ -1,0 +1,27 @@
+enum Status {
+    Queued,
+    Running,
+    Complete,
+}
+
+fn advance(status: Status) -> Status {
+    match status {
+        Status::Queued => { return Status::Running; }
+        Status::Running => { return Status::Complete; }
+        Status::Complete => { return Status::Complete; }
+    }
+}
+
+fn main() -> i64 {
+    let statuses: [Status; 2] = [Status::Queued, Status::Complete];
+    assert(statuses[1] == Status::Complete);
+    let status = advance(advance(Status::Queued));
+    match status {
+        Status::Queued => { return 1; }
+        Status::Running => { return 2; }
+        Status::Complete => {
+            print("PASS: enum match");
+            return 0;
+        }
+    }
+}

@@ -1,0 +1,56 @@
+struct Point { x: i64, y: i64 }
+
+fn twice(value: i64) -> i64 {
+    return value * 2;
+}
+
+fn test_functions_and_arithmetic() -> unit {
+    assert(twice(21) == 42);
+    assert(min(3, 5) == 3);
+    assert(max(3, 5) == 5);
+    assert(clamp(12, 0, 10) == 10);
+    assert(sign(-7) == -1);
+    assert(abs(-9) == 9);
+    assert(sqrt(81.0) == 9.0);
+    assert(pow(2.0, 3.0) == 8.0);
+}
+
+fn test_loops_and_arrays() -> unit {
+    let values: [i64; 4] = [2, 4, 6, 8];
+    var total = 0;
+    for index in 0..len(values) {
+        total = total + values[index];
+    }
+    assert(total == 20);
+
+    var count = 0;
+    while count < 3 {
+        count = count + 1;
+    }
+    assert(count == 3);
+    assert(values[0] == 2);
+    assert(values[3] == 8);
+}
+
+fn test_strings_and_structs() -> unit {
+    let language = "Fluid";
+    assert(language == "Fluid");
+    assert(language != "fluid");
+    assert(len(language) == 5);
+    assert(contains(language, "lui"));
+    assert(starts_with(language, "Fl"));
+    assert(ends_with(language, "id"));
+    assert(is_empty(""));
+
+    var point = Point { x: 3, y: 4 };
+    point.x = point.x + 5;
+    assert(point.x + point.y == 12);
+}
+
+fn main() -> i64 {
+    test_functions_and_arithmetic();
+    test_loops_and_arrays();
+    test_strings_and_structs();
+    print("PASS: core");
+    return 0;
+}

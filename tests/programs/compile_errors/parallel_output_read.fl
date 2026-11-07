@@ -1,0 +1,7 @@
+fn main() -> i64 {
+    var values: [i64] = [1, 2, 3, 4];
+    parallel for index in 0..4 {
+        values[index] = values[index] + 1;
+    }
+    return 0;
+}

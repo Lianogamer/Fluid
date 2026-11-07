@@ -1,0 +1,61 @@
+fn publish(channel: &channel_i64, value: i64) -> i64 {
+    let sent = channel_send_i64(channel, value);
+    assert(sent);
+    return value + 1;
+}
+
+fn double_float(value: f64) -> f64 {
+    return value * 2.0;
+}
+
+fn negate(value: bool) -> bool {
+    return !value;
+}
+
+fn try_read(channel: &channel_i64) -> bool {
+    var value: i64 = 0;
+    return channel_try_receive_i64(channel, value);
+}
+
+fn main() -> i64 {
+    var pool = task_pool(2);
+    var integers = channel_i64(1);
+    assert(!try_read(integers));
+
+    let publish_id = task_submit_i64(pool, publish, integers, 19);
+    var integer_value: i64 = 0;
+    let received_integer = channel_receive_i64(integers, integer_value);
+    assert(received_integer);
+    assert(integer_value == 19);
+    assert(task_result_i64(pool, publish_id) == 20);
+
+    let float_id = task_submit_f64(pool, double_float, 1.5);
+    assert(task_result_f64(pool, float_id) == 3.0);
+
+    let bool_id = task_submit_bool(pool, negate, false);
+    assert(task_result_bool(pool, bool_id));
+
+    var floats = channel_f64(1);
+    let float_sent = channel_send_f64(floats, 2.5);
+    var float_value: f64 = 0.0;
+    let float_received = channel_receive_f64(floats, float_value);
+    assert(float_sent);
+    assert(float_received);
+    assert(float_value == 2.5);
+
+    var booleans = channel_bool(1);
+    let bool_sent = channel_send_bool(booleans, true);
+    var bool_value: bool = false;
+    let bool_received = channel_receive_bool(booleans, bool_value);
+    assert(bool_sent);
+    assert(bool_received);
+    assert(bool_value);
+
+    channel_close_i64(integers);
+    assert(!channel_send_i64(integers, 7));
+    assert(!channel_receive_i64(integers, integer_value));
+    task_pool_wait(pool);
+    task_pool_close(pool);
+    print("PASS: concurrency");
+    return 0;
+}

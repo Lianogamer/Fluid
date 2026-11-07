@@ -1,0 +1,18 @@
+fn checksum(values: &[i64]) -> i64 {
+    var result = 0;
+    for index in 0..len(values) {
+        result = result + values[index];
+    }
+    return result;
+}
+
+fn main() -> i64 {
+    var values: [i64] = [];
+    reserve(values, 1000000);
+    for value in 0..1000000 {
+        push(values, value);
+    }
+    print(checksum(values));
+    print(capacity(values));
+    return 0;
+}

@@ -1,0 +1,21 @@
+fn main() -> i64 {
+    let scale = 3;
+    var results: [i64] = [];
+    for index in 0..4096 {
+        push(results, 0);
+    }
+
+    parallel for index in 0..len(results) {
+        var scratch = arena_i64(worker_arena(), 1);
+        scratch[0] = index * scale;
+        results[index] = scratch[0];
+    }
+
+    var checksum = 0;
+    for index in 0..len(results) {
+        checksum = checksum + results[index];
+    }
+    assert(checksum == 25159680);
+    print(checksum);
+    return 0;
+}
